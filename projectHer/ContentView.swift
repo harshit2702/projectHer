@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AVFoundation
 
 struct ContentView: View {
     // 1. Database Connection
@@ -23,6 +24,19 @@ struct ContentView: View {
     @State private var showingMemorySearch = false
     @State private var showingLinkAlert = false
     @State private var linkAlertMessage = ""
+
+    // Voice & STT/TTS
+    @State private var voiceMode = false
+    @State private var autoSpeakReplies = true
+
+    @StateObject private var stt = LiveSTT(localeId: "en-IN")
+    @StateObject private var tts = TTSManager()
+    
+    @State private var showingSettings = false
+    @AppStorage("selectedVoiceId") private var selectedVoiceId: String = ""
+    @AppStorage("voicePitch") private var voicePitch: Double = 1.0
+    @AppStorage("voiceRate") private var voiceRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
+    @AppStorage("silenceDuration") private var silenceDuration: Double = 1.5
     
     // Linking State
     @State private var linkingMode = false
@@ -98,6 +112,12 @@ struct ContentView: View {
                             .font(.title2)
                             .foregroundColor(.purple)
                     }
+                    
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.title2)
+                            .foregroundColor(.gray)
+                    }
                 }
                 .padding(.horizontal)
                 
@@ -159,25 +179,37 @@ struct ContentView: View {
                 }
                 
                 // Input Field
-                HStack {
-                    TextField("Talk to her...", text: $inputText)
-                        .padding(10)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(20)
-                    
-                    Button(action: { sendMessage(text: inputText) }) {
-                        Image(systemName: "paperplane.fill")
-                            .resizable()
-                            .frame(width: 20, height: 20)
-                            .padding(10)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .clipShape(Circle())
+                InputBarView(
+                    inputText: $inputText,
+                    isTyping: isTyping,
+                    isSpeaking: tts.isSpeaking,
+                    voiceMode: $voiceMode,
+                    transcript: stt.transcript,
+                    isListening: stt.isListening,
+                    onSendText: { sendMessage(text: inputText) },
+                    onEnterVoiceMode: {
+                        Task {
+                            do {
+                                voiceMode = true
+                                try await stt.requestPermissions()
+                                try stt.start()
+                            } catch {
+                                voiceMode = false
+                            }
+                        }
+                    },
+                    onToggleMic: {
+                        if stt.isListening {
+                            stt.stop()
+                        } else {
+                            Task { try? await stt.requestPermissions(); try? stt.start() }
+                        }
+                    },
+                    onCancelVoice: {
+                        stt.stop()
+                        voiceMode = false
                     }
-                    .disabled(inputText.isEmpty || isTyping)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
+                )
             }
             
             // Drawer overlay
@@ -205,12 +237,36 @@ struct ContentView: View {
         .onAppear {
             loadOrCreateActiveSession()
             checkConnection()
+            
+            // Sync silence duration
+            stt.silenceSeconds = silenceDuration
+            
+            stt.onFinal = { finalText in
+                DispatchQueue.main.async {
+                    // Temporarily stop listening while processing/sending
+                    // We stay in voiceMode so we can resume later if needed
+                    self.sendMessage(text: finalText)
+                }
+            }
+            
+            tts.onFinish = {
+                // Hands-free: if we are still in voice mode, resume listening
+                if self.voiceMode {
+                    Task { try? self.stt.start() }
+                }
+            }
+        }
+        .onChange(of: silenceDuration) { _, newValue in
+            stt.silenceSeconds = newValue
         }
         .sheet(isPresented: $showingHealth) {
             HealthView()
         }
         .sheet(isPresented: $showingMemoryDashboard) {
             MemoryDashboardView()
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(tts: tts)
         }
         .sheet(isPresented: $showingMemorySearch, onDismiss: {
             // Reset linking mode on dismiss
@@ -531,6 +587,20 @@ struct ContentView: View {
                     session.lastMessageAt = Date()
                     
                     print("✅ Message sent and reply received")
+
+                    // Speak if needed
+                    if self.autoSpeakReplies {
+                        self.stt.stop() // ensure mic is off while speaking
+                        self.tts.speak(response.reply, 
+                                       voiceId: self.selectedVoiceId,
+                                       pitchMultiplier: Float(self.voicePitch),
+                                       rate: Float(self.voiceRate))
+                    } else {
+                        // If not speaking, and we are in voice mode, maybe resume listening?
+                        // Depending on UX preference. For now, let's respect hands-free logic only if TTS was involved 
+                        // OR if we want 'silent' hands-free, we'd trigger stt.start() here.
+                        // But usually voice mode implies hearing the response.
+                    }
                 } else {
                     userMsg.status = .failed
                     connectionStatus = .serverError

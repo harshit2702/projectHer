@@ -16,5 +16,9 @@
 		<string>fetch</string>
 		<string>processing</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>We need access to your microphone for voice interaction.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>We use speech recognition to transcribe your voice commands.</string>
 </dict>
 </plist>
