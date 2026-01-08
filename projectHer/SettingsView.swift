@@ -8,6 +8,8 @@ struct SettingsView: View {
     @AppStorage("voicePitch") private var voicePitch: Double = 1.0
     @AppStorage("voiceRate") private var voiceRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
     
+    @AppStorage("showEmotionalState") private var showEmotionalState: Bool = true
+    
     @ObservedObject var tts: TTSManager
     @Environment(\.dismiss) var dismiss
     
@@ -20,6 +22,8 @@ struct SettingsView: View {
                         Slider(value: $silenceDuration, in: 0.5...5.0, step: 0.1)
                     }
                     .help("How long to wait after you stop speaking before sending.")
+                    
+                    Toggle("Show Emotional State", isOn: $showEmotionalState)
                 }
                 
                 Section(header: Text("Audio Output")) {

@@ -37,6 +37,7 @@ struct ContentView: View {
     @AppStorage("voicePitch") private var voicePitch: Double = 1.0
     @AppStorage("voiceRate") private var voiceRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
     @AppStorage("silenceDuration") private var silenceDuration: Double = 1.5
+    @AppStorage("showEmotionalState") private var showEmotionalState: Bool = true
     
     // Linking State
     @State private var linkingMode = false
@@ -91,6 +92,22 @@ struct ContentView: View {
                     Text(activeSession?.title ?? "Pandu ❤️")
                         .font(.title2).bold()
                     
+                    if showEmotionalState {
+                        VStack(spacing: 2) {
+                            Text(EmotionEngine.shared.getCurrentMood())
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(.purple)
+                            
+                            HStack(spacing: 2) {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 8))
+                                Text(String(format: "%.1f", EmotionEngine.shared.getCurrentEnergy()))
+                                    .font(.system(size: 8))
+                            }
+                            .foregroundColor(.orange)
+                        }
+                    }
+                    
                     Spacer()
                     
                     // ✅ Connection Status Indicator
@@ -98,25 +115,26 @@ struct ContentView: View {
                         .fill(connectionStatus.color)
                         .frame(width: 10, height: 10)
                         .onTapGesture {
-                            // Show connection status alert
+                            checkConnection()
                         }
                     
-                    Button(action: { showingHealth = true }) {
-                        Image(systemName: "info.circle")
+                    Menu {
+                        Button(action: { showingHealth = true }) {
+                            Label("Server Health", systemImage: "info.circle")
+                        }
+                        
+                        Button(action: { showingMemoryDashboard = true }) {
+                            Label("Memory Dashboard", systemImage: "brain.head.profile")
+                        }
+                        
+                        Button(action: { showingSettings = true }) {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                             .font(.title2)
                             .foregroundColor(.primary)
-                    }
-                    
-                    Button(action: { showingMemoryDashboard = true }) {
-                        Image(systemName: "brain.head.profile")
-                            .font(.title2)
-                            .foregroundColor(.purple)
-                    }
-                    
-                    Button(action: { showingSettings = true }) {
-                        Image(systemName: "gearshape.fill")
-                            .font(.title2)
-                            .foregroundColor(.gray)
+                            .padding(.leading, 8)
                     }
                 }
                 .padding(.horizontal)
@@ -150,6 +168,7 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .scrollDismissesKeyboard(.interactively)
                     .onChange(of: sessionMessages.count) { _, _ in
                         if let last = sessionMessages.last {
                             withAnimation {
@@ -237,6 +256,7 @@ struct ContentView: View {
         .onAppear {
             loadOrCreateActiveSession()
             checkConnection()
+            EmotionEngine.shared.wakeUp()
             
             // Sync silence duration
             stt.silenceSeconds = silenceDuration
@@ -496,6 +516,9 @@ struct ContentView: View {
         let messageText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !messageText.isEmpty else { return }
         
+        // 1. Update Emotion Engine
+        EmotionEngine.shared.processUserMessage(messageText)
+        
         // Create message with session relationship
         let userMsg = ChatMessage(text: messageText, isUser: true, session: session)
         userMsg.status = .sending
@@ -529,7 +552,9 @@ struct ContentView: View {
         let payload = ChatRequest(
             message: messageText, 
             history: historyItems,
-            context_chain_id: session.contextChainId
+            context_chain_id: session.contextChainId,
+            mood: EmotionEngine.shared.getCurrentMood(),
+            tone_instruction: EmotionEngine.shared.getToneInstruction()
         )
         request.httpBody = try? JSONEncoder().encode(payload)
         
@@ -588,8 +613,8 @@ struct ContentView: View {
                     
                     print("✅ Message sent and reply received")
 
-                    // Speak if needed
-                    if self.autoSpeakReplies {
+                    // Speak ONLY if auto-speak is on AND we are in voice mode
+                    if self.autoSpeakReplies && self.voiceMode {
                         self.stt.stop() // ensure mic is off while speaking
                         self.tts.speak(response.reply, 
                                        voiceId: self.selectedVoiceId,

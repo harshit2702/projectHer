@@ -72,6 +72,8 @@ struct ChatRequest: Codable {
     let message: String
     let history: [HistoryItem]
     let context_chain_id: String?
+    let mood: String?
+    let tone_instruction: String?
 }
 
 struct HistoryItem: Codable {

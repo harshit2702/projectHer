@@ -15,6 +15,8 @@ struct InputBarView: View {
     let onToggleMic: () -> Void
     let onCancelVoice: () -> Void
     
+    @FocusState private var isFocused: Bool
+    
     var body: some View {
         if voiceMode {
             VStack(spacing: 8) {
@@ -55,21 +57,28 @@ struct InputBarView: View {
         } else {
             HStack(alignment: .bottom) {
                 TextField("Talk to her...", text: $inputText, axis: .vertical)
+                    .focused($isFocused)
                     .lineLimit(1...5)
                     .padding(10)
                     .background(Color(.systemGray6))
                     .cornerRadius(20)
                 
                 if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button(action: onEnterVoiceMode) {
-                        Image(systemName: "mic.fill")
+                    Button(action: {
+                        if isFocused {
+                            isFocused = false
+                        } else {
+                            onEnterVoiceMode()
+                        }
+                    }) {
+                        Image(systemName: isFocused ? "keyboard.chevron.compact.down" : "mic.fill")
                             .frame(width: 20, height: 20)
                             .padding(10)
-                            .background(Color.gray)
-                            .foregroundColor(.white)
+                            .background(isFocused ? Color.gray.opacity(0.2) : Color.gray)
+                            .foregroundColor(isFocused ? .primary : .white)
                             .clipShape(Circle())
                     }
-                    .disabled(isTyping || isSpeaking)
+                    .disabled(!isFocused && (isTyping || isSpeaking))
                 } else {
                     Button(action: onSendText) {
                         Image(systemName: "paperplane.fill")
