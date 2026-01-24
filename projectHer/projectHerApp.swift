@@ -34,6 +34,11 @@ struct ProjectHerApp: App {
                 .onAppear {
                     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
                 }
+                .onOpenURL { url in
+                    print("App opened via notification: \(url)")
+                    // Trigger manual sync when opened via notification/URL
+                    BackgroundManager.shared.forceCheck()
+                }
         }
         // 3. Inject Database into View Hierarchy
         .modelContainer(sharedModelContainer)

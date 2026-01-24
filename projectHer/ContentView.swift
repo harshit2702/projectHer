@@ -547,7 +547,7 @@ struct ContentView: View {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 30
+        request.timeoutInterval = 120
         
         let payload = ChatRequest(
             message: messageText, 

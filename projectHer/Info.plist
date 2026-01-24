@@ -20,5 +20,18 @@
 	<string>We need access to your microphone for voice interaction.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We use speech recognition to transcribe your voice commands.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>harshit.projectHer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>my-ai-app</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
