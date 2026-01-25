@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var isTyping = false
     @State private var connectionStatus: ConnectionStatus = .checking
     @State private var showingHealth = false
+    @State private var showingAvatar = false
     @State private var showingMemoryDashboard = false
     @State private var showingMemorySearch = false
     @State private var showingLinkAlert = false
@@ -121,6 +122,10 @@ struct ContentView: View {
                     Menu {
                         Button(action: { showingHealth = true }) {
                             Label("Server Health", systemImage: "info.circle")
+                        }
+                        
+                        Button(action: { showingAvatar = true }) {
+                            Label("Video Call", systemImage: "video.fill")
                         }
                         
                         Button(action: { showingMemoryDashboard = true }) {
@@ -281,6 +286,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingHealth) {
             HealthView()
+        }
+        .fullScreenCover(isPresented: $showingAvatar) {
+            AvatarView(tts: tts)
         }
         .sheet(isPresented: $showingMemoryDashboard) {
             MemoryDashboardView()
@@ -613,8 +621,8 @@ struct ContentView: View {
                     
                     print("✅ Message sent and reply received")
 
-                    // Speak ONLY if auto-speak is on AND we are in voice mode
-                    if self.autoSpeakReplies && self.voiceMode {
+                    // Speak if auto-speak is on AND (Voice Mode OR Video Call is active)
+                    if self.autoSpeakReplies && (self.voiceMode || self.showingAvatar) {
                         self.stt.stop() // ensure mic is off while speaking
                         self.tts.speak(response.reply, 
                                        voiceId: self.selectedVoiceId,

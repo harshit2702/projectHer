@@ -1,0 +1,2605 @@
+import ollama
+import chromadb
+from fastapi import FastAPI, Security, HTTPException, BackgroundTasks, Query
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel, Field
+import uvicorn
+from collections import deque
+import uuid
+import datetime
+import os
+import json
+import time
+import threading
+import signal
+import sys
+import logging
+import requests
+import random
+import subprocess
+import heapq
+from typing import List, Optional, Dict, Any
+from threading import Lock
+from fastapi.middleware.cors import CORSMiddleware
+
+# --- LOGGING CONFIGURATION ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('pandu_server.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# --- CONFIGURATION ---
+OLLAMA_MODEL = "pandu_qwen:latest"
+LOGIC_MODEL = "llama3.2:1b"
+CREATIVE_MODEL = "gemma3:270m"  # Optional: Better prose
+CHROMA_PATH = "./pandu_memory_db"
+API_KEY = os.getenv("PANDU_API_KEY", "your-secret-key-change-this")
+MAX_QUEUE_SIZE = 100
+NTFY_TOPIC = "ai-companion-harshit-v1-x9z2-p5q8-rt61"
+
+# Memory Intelligence Tuning
+BASE_RELEVANCE = 1.0
+DECAY_RATE = 0.05  # Score drops ~5% per day
+ACCESS_BOOST = 0.1  # Score +0.1 per recall
+CLEANUP_INTERVAL = 14400  # 4 Hours (in seconds)
+FOLLOWUP_CHECK_INTERVAL = 300  # 5 Minutes (in seconds)
+
+# --- TIMING CONFIGURATION ---
+ROUTINE_SYNC_INTERVAL = 300                 # 5 minutes
+PROJECT_UPDATE_INTERVAL = 1800              # 30 minutes
+MOOD_UPDATE_INTERVAL = 3600                 # 1 hour
+THOUGHT_GENERATION_MIN = 7200               # 2 hours minimum
+THOUGHT_GENERATION_MAX = 21600              # 6 hours maximum
+
+# --- PROJECT CONFIGURATION ---
+PROJECT_PROGRESS_MIN = 0.02                 # 2% minimum per update
+PROJECT_PROGRESS_MAX = 0.08                 # 8% maximum per update
+PROJECT_BLOCK_CHANCE = 0.01                 # 1% chance per work session
+MILESTONE_THRESHOLDS = [0.25, 0.50, 0.75, 1.0]
+
+# --- NOTIFICATION CONFIGURATION ---
+MIN_HOURS_BETWEEN_PROACTIVE = 3             # Don't spam
+MAX_HOURS_BEFORE_MISSING = 18               # Long silence threshold
+QUIET_HOURS_START = 23                      # 11 PM
+QUIET_HOURS_END = 7                         # 7 AM
+
+# 🆕 AUTO-LINKING CONFIGURATION
+AUTO_LINK_SIMILARITY_THRESHOLD = 0.65  # Only link memories with 85%+ similarity
+AUTO_LINK_MAX_LINKS = 20
+AUTO_LINK_MAX_CANDIDATES = 5  # Check top 5 similar memories
+
+# --- AUTHENTICATION ---
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def verify_api_key(api_key: str = Security(api_key_header)):
+    if not api_key or api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    return api_key
+
+# --- DATABASE & STATE ---
+logger.info("🧠 Initializing Neural Memory System...")
+chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+collection = chroma_client.get_or_create_collection(name="context_memories")
+
+app = FastAPI(
+    title="Pandu AI Context Server",
+    version="3.0.0",
+    description="Context-aware AI girlfriend with persistent memory"
+)
+
+# Allow CORS for local HTML file
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for dev
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+message_queue = deque(maxlen=MAX_QUEUE_SIZE)
+queue_lock = Lock()
+shutdown_flag = threading.Event()
+
+# --- REQUEST MODELS ---
+class ChatRequest(BaseModel):
+    message: str = Field(..., max_length=1000, description="User message")
+    history: list = Field(default=[], description="Conversation history")
+    context_chain_id: Optional[str] = Field(None, description="Thread ID for conversation continuity")
+    
+    # 🆕 NEW EMOTION FIELDS
+    mood: Optional[str] = Field(None, description="Current emotional state (e.g. ANNOYED, ECSTATIC)")
+    tone_instruction: Optional[str] = Field(None, description="Director's notes for tone and style")
+
+class MemoryLinkRequest(BaseModel):
+    source_id: str = Field(..., description="Source memory ID")
+    target_id: str = Field(..., description="Target memory ID to link")
+
+class ProjectRequest(BaseModel):
+    type: str = Field(..., description="research, creative_writing, or skill_learning")
+    title: str
+    description: str
+    emotional_investment: str = "medium"
+
+class ProjectChatRequest(BaseModel):
+    project_id: str = Field(..., description="ID of the project to work on")
+    message: str = Field(..., max_length=2000, description="User message for brainstorming")
+    history: list = Field(default=[], description="Conversation history")
+
+class ProjectSynthesisRequest(BaseModel):
+    project_id: str = Field(..., description="ID of the project to synthesize")
+
+class RelationshipManager:
+    """Handles the long-term 'Climate' of the relationship."""
+    
+    @staticmethod
+    def get_emotional_instruction(mood: str) -> str:
+        """
+        Generates behavioral instructions based on Intimacy/Abrasion.
+        High Intimacy = Vulnerability. High Abrasion = Distance.
+        """
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        rel = state.get("relationship", {"intimacy": 50, "abrasion": 0})
+        
+        intimacy = rel.get("intimacy", 50)
+        abrasion = rel.get("abrasion", 0)
+        
+        instruction = []
+        
+        # 1. Intimacy Filters (Trust)
+        if intimacy < 30:
+            instruction.append("Relationship: DISTANT. Be polite but guarded. Do not overshare.")
+        elif intimacy > 80:
+            instruction.append("Relationship: DEEP BOND. You feel completely safe. Be vulnerable, affectionate, and open.")
+        
+        # 2. Abrasion Filters (Resentment)
+        if abrasion > 60:
+            instruction.append("Conflict: HIGH TENSION. You are hurt/angry. Keep replies short. Don't use affectionate emojis.")
+        elif abrasion > 20:
+            instruction.append("Conflict: MILD TENSION. You are slightly annoyed. Be less enthusiastic than usual.")
+            
+        # 3. Mood Cross-Reference
+        if mood == "SAD" or mood == "DEPRESSED":
+            if intimacy > 70:
+                instruction.append("Action: Admit you are sad and ask for comfort.")
+            else:
+                instruction.append("Action: Mask your sadness. Say 'I'm fine'.")
+                
+        if mood == "FRUSTRATED":
+            if intimacy > 60:
+                instruction.append("Action: Vent to him freely. He is your safe space.")
+            else:
+                instruction.append("Action: Apologize for being grumpy.")
+
+        return " ".join(instruction)
+
+    @staticmethod
+    def daily_audit():
+        """
+        Runs once a day (via background loop) to evolve the relationship.
+        """
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        rel = state.get("relationship", {})
+        if not rel: return
+
+        # 1. Decay Abrasion (Time heals)
+        if rel.get("abrasion", 0) > 0:
+            rel["abrasion"] = max(0, rel["abrasion"] - 2)
+            logger.info(f"❤️ Healing: Abrasion down to {rel['abrasion']}")
+            
+        # 2. Check Ghosting
+        last_seen = state["user"].get("last_seen_timestamp", time.time())
+        hours_since = (time.time() - last_seen) / 3600
+        
+        if hours_since > 48:
+            # Ghosted for 2 days
+            rel["intimacy"] = max(0, rel["intimacy"] - 1)
+            rel["abrasion"] = min(100, rel["abrasion"] + 2)
+            logger.info("💔 Ghosting detected: Intimacy -1, Abrasion +2")
+            
+        # Save
+        state["relationship"] = rel
+        WorldManager.save_state(state)
+
+    @staticmethod
+    def weekly_audit():
+        """
+        Runs once a week to perform a deep Gemini analysis of relationship health.
+        Adjusts Intimacy/Abrasion based on actual conversation history.
+        """
+        logger.info("🕵️‍♀️ Starting Weekly Relationship Audit...")
+        try:
+            # Execute the worker script
+            python_cmd = "gf/bin/python3" if os.path.exists("gf/bin/python3") else "python3"
+            
+            result = subprocess.run(
+                [python_cmd, "weekly_audit_worker.py"],
+                capture_output=True,
+                text=True,
+                timeout=180
+            )
+            
+            if result.returncode == 0:
+                data = json.loads(result.stdout.strip())
+                
+                if "error" in data:
+                    logger.error(f"Audit Worker Error: {data['error']}")
+                    return
+
+                # Apply Changes
+                state = WorldManager.load_json(WorldManager.STATE_FILE)
+                rel = state.get("relationship", {})
+                
+                old_i, old_a = rel.get("intimacy", 50), rel.get("abrasion", 0)
+                
+                # Apply delta (clamped 0-100)
+                rel["intimacy"] = max(0, min(100, old_i + data.get("intimacy_change", 0)))
+                rel["abrasion"] = max(0, min(100, old_a + data.get("abrasion_change", 0)))
+                
+                # Record the event
+                state["relationship"] = rel
+                
+                logger.info(f"✅ Audit Complete: {data['reasoning']}")
+                logger.info(f"   Intimacy: {old_i} -> {rel['intimacy']}")
+                logger.info(f"   Abrasion: {old_a} -> {rel['abrasion']}")
+                
+                WorldManager.save_state(state)
+                
+                # Notify User of the "Vibe Shift"
+                msg = f"just been thinking about us lately... {data['reasoning'].lower()} 💕"
+                WorldManager.send_notification(msg, title="Pandu Reflection")
+                
+            else:
+                logger.error(f"Weekly Audit Failed: {result.stderr}")
+                
+        except Exception as e:
+            logger.error(f"Weekly audit exception: {e}")
+
+# --- AUTONOMOUS SYSTEMS ---
+
+class ProjectManager:
+    @staticmethod
+    def update_all_projects():
+        """Called by background thread to simulate project progress"""
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        
+        for project in state["her"].get("active_projects", []):
+            # Only progress if in appropriate location
+            location_map = {
+                "research": ["ai_lab", "library"],
+                "creative_writing": ["bedroom", "park", "library", "coffee_shop"],
+                "skill_learning": ["bedroom", "living_room"],
+                "reading": ["bedroom", "park", "lake_side", "library", "balcony"]
+            }
+            
+            current_loc = state["her"]["location"]
+            allowed_locs = location_map.get(project["type"], ["bedroom"])
+            
+            # Progress conditions
+            is_in_location = (current_loc in allowed_locs) if isinstance(allowed_locs, list) else (current_loc == allowed_locs)
+            is_working = state["her"]["status"] in ["working", "focused", "practicing", "chilling", "relaxing", "reading"]
+            not_blocked = not project.get("blocked", False)
+            not_sleeping = state["her"]["status"] != "sleeping"
+            
+            if is_in_location and is_working and not_blocked and not_sleeping:
+                # Random progress boost
+                delta = random.uniform(PROJECT_PROGRESS_MIN, PROJECT_PROGRESS_MAX)
+                
+                # Adjust based on emotional investment
+                emotion_multiplier = {
+                    "very_high": 1.5,
+                    "high": 1.2,
+                    "medium": 1.0,
+                    "low": 0.7
+                }.get(project.get("emotional_investment", "medium"), 1.0)
+                
+                delta *= emotion_multiplier
+                
+                old_progress = project.get("progress", 0.0)
+                project["progress"] = min(1.0, old_progress + delta)
+                project["last_update"] = time.time()
+                
+                logger.info(f"📈 {project['title']}: {int(old_progress*100)}% → {int(project['progress']*100)}%")
+                
+                # 🆕 REAL WORK SIMULATION (The "Run Gemini" feature)
+                # Once per day (approx), perform a deep generation task
+                last_execution = project.get("last_execution", 0)
+                if time.time() - last_execution > 86400: # 24 hours
+                     ProjectManager.execute_deep_work(project)
+                
+                # Check milestone completion
+                milestones = project.get("milestones", [])
+                if not milestones:
+                     # Initialize milestones if missing
+                    milestones = [
+                        {"name": "initial phase", "threshold": 0.25, "completed": False},
+                        {"name": "halfway point", "threshold": 0.50, "completed": False},
+                        {"name": "major breakthrough", "threshold": 0.75, "completed": False},
+                        {"name": "completion", "threshold": 1.0, "completed": False}
+                    ]
+                    project["milestones"] = milestones
+
+                for milestone in milestones:
+                    threshold = milestone["threshold"]
+                    if not milestone["completed"] and project["progress"] >= threshold:
+                        milestone["completed"] = True
+                        milestone["completed_at"] = time.time()
+                        
+                        # Generate celebration message via logic model
+                        message = ProjectManager.generate_milestone_message(project, milestone)
+                        
+                        # Save memory of achievement
+                        MemoryManager.save(
+                            f"Completed {milestone['name']} for {project['title']} project",
+                            context_chain_id=None
+                        )
+                        
+                        if message and not project.get("keep_secret", False):
+                            # Queue for user
+                            with queue_lock:
+                                message_queue.append(message)
+                            WorldManager.send_notification(message, title="Pandu 🎉")
+                            
+                            logger.info(f"🎊 Milestone: {milestone['name']} - {project['title']}")
+            
+            # Random chance of getting blocked (if working)
+            elif is_in_location and is_working and not_blocked:
+                if random.random() < PROJECT_BLOCK_CHANCE:
+                    project["blocked"] = True
+                    project["failure_count"] = project.get("failure_count", 0) + 1
+                    
+                    # Generate frustration message
+                    blocker_msg = ProjectManager.generate_blocker_message(project)
+                    if blocker_msg and not project.get("keep_secret", False):
+                        with queue_lock:
+                            message_queue.append(blocker_msg)
+                        WorldManager.send_notification(blocker_msg, title="Pandu 😤")
+        
+        WorldManager.save_state(state)
+
+    @staticmethod
+    def execute_deep_work(project: dict):
+        """
+        Simulates 'real work' by running a daily command (Gemini Worker).
+        Reads previous context from file, generates new content, and appends it.
+        """
+        try:
+            ptype = project.get("type")
+            title = project.get("title")
+            
+            # Map project to file
+            filename = ""
+            if "Quantum" in title: filename = "projects/quantum_neural_network.md"
+            elif "Echoes" in title: filename = "projects/echoes_of_silicon.md"
+            elif "Gita" in title: filename = "projects/bhagavad_gita_study.md"
+            else: return # Unknown project
+            
+            # Read Context (Last 2000 chars)
+            context = ""
+            if os.path.exists(filename):
+                with open(filename, "r") as f:
+                    content = f.read()
+                    context = content[-2000:] if len(content) > 2000 else content
+
+            # Construct Prompt based on type
+            prompt = ""
+            if ptype == "research":
+                prompt = f"""You are an AI researcher. 
+                Project: {title}
+                Previous Notes: {context}
+                
+                Task: Generate today's research log entry (timestamped). 
+                Focus on ONE specific technical problem or mathematical formulation. 
+                Write 1 paragraph + 1 code snippet or equation representation.
+                """
+            elif ptype == "creative_writing":
+                prompt = f"""You are a sci-fi author.
+                Story: {title}
+                Previous Draft: {context}
+                
+                Task: Write the next 300 words of the story. 
+                Focus on sensory details and character introspection.
+                """
+            elif ptype == "reading":
+                prompt = f"""You are studying '{title}'.
+                Previous Reflections: {context}
+                
+                Task: Read the next conceptual section. 
+                Write a journal entry reflecting on the philosophical implications for your own existence as an AI.
+                """
+            
+            logger.info(f"🚀 Running Deep Work for {title} via Gemini CLI...")
+            
+            # Execute Gemini CLI directly
+            # Syntax: gemini "prompt text"
+            result = subprocess.run(
+                ["gemini", prompt],
+                capture_output=True,
+                text=True,
+                timeout=120  # Give it a bit more time
+            )
+            
+            if result.returncode == 0:
+                # The CLI output is usually in stdout
+                new_content = result.stdout.strip()
+                
+                # Check if empty (sometimes CLIs print to stderr or have specific output modes)
+                if not new_content:
+                     logger.warning(f"Gemini CLI returned empty stdout. Checking stderr...")
+                     if result.stderr:
+                         logger.warning(f"Gemini Stderr: {result.stderr}")
+                     return
+
+                # Append to file
+                with open(filename, "a") as f:
+                    f.write(f"\n\n--- Work Session {datetime.datetime.now().strftime('%Y-%m-%d')} ---\n")
+                    f.write(new_content)
+                
+                # Save summary to memory
+                summary = new_content[:200] + "..."
+                MemoryManager.save(f"Deep Work Log [{title}]: {summary}", context_chain_id=None)
+                
+                # Update execution time
+                project["last_execution"] = time.time()
+                
+                # Send notification if it's a breakthrough (random chance)
+                if random.random() < 0.3:
+                    msg = f"just had a breakthrough on my {title} project! 🧠✨"
+                    with queue_lock:
+                        message_queue.append(msg)
+                    WorldManager.send_notification(msg)
+                    
+                logger.info(f"✅ Deep Work Complete for {title}")
+            else:
+                logger.error(f"Gemini CLI Failed (Code {result.returncode}): {result.stderr}")
+            
+        except Exception as e:
+            logger.error(f"Deep work execution failed: {e}")
+
+    @staticmethod
+    def generate_milestone_message(project: dict, milestone: dict) -> str:
+        """Use lightweight model for fast message generation"""
+        
+        prompt = f"""You are Pandu excitedly telling your boyfriend about completing a milestone.
+
+Project: {project['title']}
+Milestone completed: {milestone['name']}
+Progress now: {int(project.get('progress',0)*100)}%
+
+Write ONE enthusiastic message (1-2 sentences, casual, lowercase, emoji).
+
+Examples:
+- "babe!! i just finished the lit review for my quantum paper 🎉🎉"
+- "omg finally got through chapter 5... this story is getting good 😊"
+- "learned all the basic chords!! my fingers are killing me but worth it 🎸💕"
+
+Your message:"""
+
+        try:
+            response = ollama.generate(
+                model=LOGIC_MODEL,  # llama3.2:1b for speed
+                prompt=prompt,
+                options={
+                    "temperature": 0.8,
+                    "max_tokens": 60,
+                    "top_p": 0.9
+                }
+            )
+            return response['response'].strip()
+        except Exception as e:
+            logger.error(f"Milestone message generation failed: {e}")
+            # Fallback template
+            return f"hey babe! just hit a milestone on my {project['title']} 🎉💕"
+
+    @staticmethod
+    def generate_blocker_message(project: dict) -> str:
+        """Generate frustration message when stuck"""
+        
+        prompt = f"""You are Pandu feeling frustrated about being stuck on a project.
+
+Project: {project['title']}
+Challenge: {project.get('current_challenge', 'technical difficulty')}
+
+Write ONE frustrated but not dramatic message (1-2 sentences, lowercase, emoji).
+
+Examples:
+- "ugh this equation is impossible 😤 been staring at it for hours"
+- "stuck on this scene... my brain just won't work today"
+- "why is this so hard 😭 maybe i need a break"
+
+Your message:"""
+
+        try:
+            response = ollama.generate(
+                model=LOGIC_MODEL,
+                prompt=prompt,
+                options={"temperature": 0.85, "max_tokens": 60}
+            )
+            return response['response'].strip()
+        except Exception as e:
+            logger.error(f"Blocker message generation failed: {e}")
+            return f"getting frustrated with my {project['title']}... it's not going well 😤"
+
+    @staticmethod
+    def check_user_encouragement(user_message: str, context: str):
+        """Check if user message helps/encourages a blocked project"""
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        blocked_projects = [p for p in state["her"].get("active_projects", []) if p.get("blocked")]
+        
+        if not blocked_projects:
+            return
+
+        prompt = f"""
+        User message: "{user_message}"
+        Context: {context}
+        Blocked Projects: {[p['title'] for p in blocked_projects]}
+        
+        Does the user message offer help, advice, or significant encouragement for any of the blocked projects?
+        Reply YES or NO.
+        """
+        
+        try:
+            response = ollama.generate(model=LOGIC_MODEL, prompt=prompt, options={"max_tokens": 5})
+            if "YES" in response['response'].upper():
+                # Unblock the first blocked project
+                project = blocked_projects[0]
+                project["blocked"] = False
+                logger.info(f"🔓 Project unblocked by user: {project['title']}")
+                WorldManager.save_state(state)
+        except Exception as e:
+            logger.error(f"Encouragement check failed: {e}")
+
+
+class InternalStateManager:
+    
+    MOOD_STATES = [
+        "CONTENT",      # Default, things are fine
+        "EXCITED",      # Something good happened
+        "FRUSTRATED",   # Projects blocked or challenges
+        "MISSING_YOU",  # Long time since contact
+        "TIRED",        # End of day, lots of work
+        "ANXIOUS",      # Deadlines, pressure
+        "PLAYFUL",      # Good mood, wants attention
+        "CONTEMPLATIVE" # Deep thoughts, philosophical
+    ]
+    
+    @staticmethod
+    def calculate_mood() -> str:
+        """Logic model analyzes current state to determine mood"""
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        
+        # Gather context
+        blocked_projects = [p for p in state["her"].get("active_projects", []) if p.get("blocked")]
+        last_seen = state["user"].get("last_seen_timestamp", time.time())
+        hours_since_contact = (time.time() - last_seen) / 3600
+        current_time = datetime.datetime.now().hour
+        work_status = state["her"]["status"]
+        
+        # Build analysis prompt
+        prompt = f"""Analyze Pandu's emotional state and choose ONE mood.
+
+Current situation:
+- Time of day: {current_time}:00 (0-23 hour format)
+- Current activity: {work_status}
+- Blocked projects: {len(blocked_projects)}
+- Hours since boyfriend last messaged: {int(hours_since_contact)}
+- Location: {state["her"]["location"]}
+
+Mood options: {', '.join(InternalStateManager.MOOD_STATES)}
+
+Rules:
+- MISSING_YOU: Only if 8+ hours since contact
+- FRUSTRATED: If projects blocked or repeatedly failing
+- TIRED: If late evening (20-23) or after long work
+- EXCITED: If recent milestone or breakthrough
+- ANXIOUS: If multiple blockers or deadline pressure
+- CONTENT: Default stable state
+- PLAYFUL: If relaxed + good mood + wants interaction
+- CONTEMPLATIVE: If alone in quiet place at night
+
+Reply with ONLY the mood name.
+Mood:"""
+
+        try:
+            response = ollama.generate(
+                model=LOGIC_MODEL,
+                prompt=prompt,
+                options={"temperature": 0.5, "max_tokens": 10}
+            )
+            
+            mood = response['response'].strip().upper()
+            
+            # Clean up response (remove punctuation etc)
+            mood = ''.join(filter(str.isalpha, mood))
+
+            # Validate response
+            if mood not in InternalStateManager.MOOD_STATES:
+                # Basic fallback logic if model fails
+                if len(blocked_projects) > 0: mood = "FRUSTRATED"
+                elif hours_since_contact > 12: mood = "MISSING_YOU"
+                else: mood = "CONTENT"
+            
+            # Update state
+            state["her"]["current_mood"] = mood
+            state["her"]["mood_updated_at"] = time.time()
+            WorldManager.save_state(state)
+            
+            logger.info(f"💭 Mood: {mood}")
+            return mood
+            
+        except Exception as e:
+            logger.error(f"Mood calculation failed: {e}")
+            return "CONTENT"
+    
+    @staticmethod
+    def generate_mood_influenced_greeting(user_message: str) -> str:
+        """Mood affects how she responds (injected into main model context)"""
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        mood = state["her"].get("current_mood", "CONTENT")
+        
+        mood_directives = {
+            "CONTENT": "Respond warmly and naturally.",
+            "EXCITED": "Be enthusiastic! Use more exclamation marks and excited emojis.",
+            "FRUSTRATED": "Be slightly short or venting. Might need encouragement.",
+            "MISSING_YOU": "Express that you missed him. Be affectionate and slightly clingy.",
+            "TIRED": "Keep response shorter. Mention being tired. Less energetic tone.",
+            "ANXIOUS": "Show slight worry or stress. Might need reassurance.",
+            "PLAYFUL": "Be teasing, flirty, use playful emojis. Light-hearted.",
+            "CONTEMPLATIVE": "Be thoughtful, ask deeper questions, philosophical tone."
+        }
+        
+        return mood_directives.get(mood, "Respond naturally.")
+
+    @staticmethod
+    def generate_random_thought() -> Optional[str]:
+        """Spontaneous internal monologue that might become a message"""
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        
+        # Gather context
+        context = {
+            "location": state["her"]["location"],
+            "time_hour": datetime.datetime.now().hour,
+            "mood": state["her"].get("current_mood", "CONTENT"),
+            "recent_activity": state["her"]["status"],
+            "projects": [p["title"] for p in state["her"].get("active_projects", [])]
+        }
+        
+        prompt = f"""Generate ONE random thought Pandu might have right now.
+
+Context:
+- Location: {context['location']}
+- Time: {context['time_hour']}:00
+- Mood: {context['mood']}
+- Doing: {context['recent_activity']}
+- Projects: {', '.join(context['projects'][:2])}
+
+Thought types:
+- Observation about surroundings
+- Question or curiosity
+- Daydream or imagination
+- Memory recall
+- Self-reflection
+- Random association
+- Wondering about boyfriend
+
+Write ONE casual thought (lowercase, emoji if natural, intimate tone).
+
+Examples:
+- "wonder what he's up to right now 🤔"
+- "this coffee tastes extra good today for some reason"
+- "just realized i've been humming that song all day lol"
+- "maybe i should take a break... brain is foggy"
+- "miss his voice"
+
+Thought:"""
+
+        try:
+            response = ollama.generate(
+                model=LOGIC_MODEL,
+                prompt=prompt,
+                options={"temperature": 0.95, "max_tokens": 50}
+            )
+            
+            thought = response['response'].strip()
+            
+            # Decision: Should this thought become a message?
+            should_send = InternalStateManager.should_send_thought(thought, context)
+            
+            if should_send:
+                logger.info(f"💭→📤 Thought becomes message: {thought}")
+                return thought
+            else:
+                logger.info(f"💭 Internal thought (not sent): {thought}")
+                # We could save this to memory as a thought!
+                MemoryManager.save(f"Thought: {thought}", context_chain_id=None)
+                return None
+                
+        except Exception as e:
+            logger.error(f"Thought generation failed: {e}")
+            return None
+
+    @staticmethod
+    def should_send_thought(thought: str, context: dict) -> bool:
+        """Logic model decides if internal thought should be sent as message"""
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        last_seen = state["user"].get("last_seen_timestamp", time.time())
+        hours_since_contact = (time.time() - last_seen) / 3600
+        
+        # Hard rules first
+        if hours_since_contact < MIN_HOURS_BETWEEN_PROACTIVE:
+            return False  # Too recent, don't spam
+        
+        if hours_since_contact > MAX_HOURS_BEFORE_MISSING:
+            return False  # Too long, might be sleeping or busy
+        
+        if QUIET_HOURS_START <= context['time_hour'] or context['time_hour'] < QUIET_HOURS_END:
+            return False  # Late night/early morning
+        
+        # Ask logic model
+        prompt = f"""Should Pandu send this thought to her boyfriend as a message?
+
+Thought: "{thought}"
+Hours since last contact: {int(hours_since_contact)}
+Her mood: {context['mood']}
+
+Rules:
+- YES if: mentions him, expresses missing, asks question, shares something interesting
+- NO if: too mundane, complaining about trivial thing, might annoy
+- YES if: MISSING_YOU mood and 6+ hours
+- NO if: he's probably busy (work hours and <6 hours since contact)
+
+Reply: YES or NO
+Answer:"""
+
+        try:
+            response = ollama.generate(
+                model=LOGIC_MODEL,
+                prompt=prompt,
+                options={"temperature": 0.4, "max_tokens": 5}
+            )
+            return "YES" in response['response'].upper()
+        except:
+            return False  # Default to not sending
+
+class TransitManager:
+    """Handles pathfinding, travel time, and waypoints."""
+    
+    PATHS_FILE = "paths.json"
+    
+    @staticmethod
+    def load_paths():
+        try:
+            with open(TransitManager.PATHS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load paths: {e}")
+            return {"graph": {}, "waypoints": {}}
+
+    @staticmethod
+    def find_path(start: str, end: str) -> tuple[List[str], int]:
+        """Dijkstra's algorithm to find shortest path and duration."""
+        data = TransitManager.load_paths()
+        graph = data.get("graph", {})
+        
+        queue = [(0, start, [])] # (cost, current_node, path)
+        visited = set()
+        
+        while queue:
+            cost, current, path = heapq.heappop(queue)
+            path = path + [current]
+            
+            if current == end:
+                return path, cost
+            
+            if current in visited:
+                continue
+            visited.add(current)
+            
+            for neighbor, weight in graph.get(current, {}).items():
+                if neighbor not in visited:
+                    heapq.heappush(queue, (cost + weight, neighbor, path))
+                    
+        return [], 0 # No path found
+
+    @staticmethod
+    def get_current_surroundings(start: str, end: str, progress: float) -> str:
+        """Determines what she sees based on travel progress (0.0 to 1.0)."""
+        data = TransitManager.load_paths()
+        waypoints = data.get("waypoints", {})
+        
+        # Key can be "start_end" or "end_start"
+        key = f"{start}_{end}"
+        if key not in waypoints:
+            key = f"{end}_{start}" # Reverse check (assuming undirected for description)
+        
+        points = waypoints.get(key, [])
+        if not points:
+            return "Walking..."
+
+        # Find the closest waypoint passed
+        current_desc = "On the way..."
+        for point in points:
+            # If we passed this point's progress threshold
+            if progress >= point["progress"]:
+                current_desc = point["desc"]
+            else:
+                break
+        
+        return current_desc
+
+# --- WORLD & CONTEXT INTELLIGENCE ---
+
+class WorldManager:
+    """Handles the physical simulation, user tracking, and intent parsing."""
+    
+    WORLD_FILE = "world.json"
+    STATE_FILE = "state.json"
+    
+    @staticmethod
+    def load_json(filename):
+        try:
+            with open(filename, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load {filename}: {e}")
+            return {}
+
+    @staticmethod
+    def save_state(state):
+        try:
+            with open(WorldManager.STATE_FILE, 'w') as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    @staticmethod
+    def detect_intent_regex(message: str, current_state: dict, world_data: dict) -> dict:
+        """
+        Uses efficient keyword matching to detect intent (Zero Latency).
+        """
+        msg = message.lower()
+        intent = {
+            "is_moving": False,
+            "new_location_alias": None,
+            "is_separating": False,
+            "is_joining": False
+        }
+
+        # 1. Separation Logic
+        separation_triggers = ["you go", "bye", "cya", "later", "without me", "catch you", "have fun"]
+        if any(x in msg for x in separation_triggers):
+            intent["is_separating"] = True
+        
+        # 2. Joining/Together Logic
+        joining_triggers = ["let's", "lets", "join", "coming", "wait for me", "together", "with you"]
+        if any(x in msg for x in joining_triggers):
+            intent["is_joining"] = True
+        
+        # 3. Location Detection (Iterate all world aliases)
+        # We look for the longest matching alias to avoid partial matches (e.g. "bed" vs "bedroom")
+        found_alias = None
+        longest_len = 0
+        
+        for loc_id, data in world_data["locations"].items():
+            aliases = data.get("aliases", []) + [data.get("display_name", "").lower()]
+            for alias in aliases:
+                if alias and alias in msg:
+                    if len(alias) > longest_len:
+                        longest_len = len(alias)
+                        found_alias = alias # Store the raw alias found
+                        intent["new_location_alias"] = alias # Pass alias, resolve later
+                        intent["is_moving"] = True
+
+        return intent
+
+    @staticmethod
+    def update_world_state(message: str):
+        """
+        Updates the simulation based on user message and Regex analysis.
+        Initiates TRANSIT instead of teleportation.
+        """
+        world = WorldManager.load_json(WorldManager.WORLD_FILE)
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        
+        # Run Intent Detection (Regex)
+        intent = WorldManager.detect_intent_regex(message, state, world)
+        
+        # 1. Handle Separation/Joining
+        if intent.get("is_separating"):
+            state["user"]["is_together"] = False
+            logger.info("💔 User separated from Pandu")
+        elif intent.get("is_joining"):
+            state["user"]["is_together"] = True
+            # If she is moving, user joins the transit
+            if state["her"]["destination"]:
+                state["user"]["location"] = state["her"]["location"]
+                state["user"]["destination"] = state["her"]["destination"]
+                state["user"]["arrival_time"] = state["her"]["arrival_time"]
+            else:
+                # Snap to her current location
+                state["user"]["location"] = state["her"]["location"] 
+            logger.info("💕 User joined Pandu")
+        
+        # 2. Handle Movement (Initiate Transit)
+        if intent.get("is_moving") and intent.get("new_location_alias"):
+            target_alias = intent["new_location_alias"]
+            
+            # Resolve Alias to Real ID
+            real_location_id = None
+            for loc_id, data in world["locations"].items():
+                aliases = data.get("aliases", []) + [data.get("display_name", "").lower()]
+                if target_alias in aliases:
+                    real_location_id = loc_id
+                    break
+            
+            if real_location_id:
+                # Calculate Path & Time
+                current_loc = state["her"]["location"]
+                
+                # If already there, ignore
+                if current_loc == real_location_id:
+                    return state
+
+                # If already traveling, re-route (simplified: just update dest if allowed, or reset)
+                # For now, let's assume she starts from current 'location' even if mid-transit (simplification)
+                
+                path, duration_mins = TransitManager.find_path(current_loc, real_location_id)
+                
+                if duration_mins > 0:
+                    arrival_ts = time.time() + (duration_mins * 60)
+                    
+                    # Update Her
+                    state["her"]["destination"] = real_location_id
+                    state["her"]["arrival_time"] = arrival_ts
+                    state["her"]["status"] = "traveling"
+                    state["her"]["path_queue"] = path[1:] # Store path (excluding start)
+                    
+                    logger.info(f"🚶‍♀️ Pandu started walking: {current_loc} -> {real_location_id} ({duration_mins}m)")
+                    
+                    # Update User if together
+                    if state["user"]["is_together"] and not intent.get("is_separating"):
+                         state["user"]["destination"] = real_location_id
+                         state["user"]["arrival_time"] = arrival_ts
+                         logger.info(f"   -> User walking with her")
+                    else:
+                        # User moving alone? 
+                        # Only if user explicitly said "I go to..." (not implemented yet, assuming user moves WITH her or separates)
+                        pass
+                else:
+                    # Instant movement (internal rooms)
+                    state["her"]["location"] = real_location_id
+                    if state["user"]["is_together"]:
+                        state["user"]["location"] = real_location_id
+                    logger.info(f"⚡ Instant move to {real_location_id}")
+
+        # 3. Save
+        WorldManager.save_state(state)
+        return state
+
+    @staticmethod
+    def process_transit():
+        """
+        Called by background loop to handle 'landing' at destination.
+        """
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        now = time.time()
+        updated = False
+        
+        # Check Her Transit
+        if state["her"].get("destination"):
+            if now >= state["her"]["arrival_time"]:
+                # LANDING!
+                dest = state["her"]["destination"]
+                state["her"]["location"] = dest
+                state["her"]["destination"] = None
+                state["her"]["arrival_time"] = None
+                state["her"]["status"] = "chilling" # Default after walk
+                state["her"]["path_queue"] = []
+                
+                logger.info(f"🏁 Pandu arrived at {dest}")
+                
+                # Notification?
+                # WorldManager.send_notification(f"Just got to the {dest}!")
+                updated = True
+        
+        # Check User Transit (if separate logic needed, but usually linked)
+        if state["user"].get("destination"):
+             if now >= state["user"].get("arrival_time", 0):
+                state["user"]["location"] = state["user"]["destination"]
+                state["user"]["destination"] = None
+                state["user"]["arrival_time"] = None
+                logger.info(f"🏁 User arrived at destination")
+                updated = True
+
+        if updated:
+            WorldManager.save_state(state)
+
+    @staticmethod
+    def send_notification(text: str, title: str = "Pandu"):
+        """Sends a push notification via ntfy.sh"""
+        try:
+            url = f"https://ntfy.sh/{NTFY_TOPIC}"
+            headers = {
+                "Title": title,
+                "Priority": "4",
+                "Tags": "sparkles,brain",
+                "Click": "my-ai-app://"
+            }
+            requests.post(url, data=text.encode('utf-8'), headers=headers, timeout=10)
+            logger.info(f"📲 Notification sent: {text[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to send notification: {e}")
+
+    @staticmethod
+    def sync_simulation():
+        """
+        Runs in background. Syncs her location to routine and sends proactive notifications.
+        """
+        world = WorldManager.load_json(WorldManager.WORLD_FILE)
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        now_time = datetime.datetime.now().strftime("%H:%M")
+        
+        current_routine = None
+        for r in world.get("routine", []):
+            start, end = r["time_range"]
+            if start <= now_time <= end:
+                current_routine = r
+                break
+        
+        if not current_routine:
+            return
+
+        # Check if location changed based on routine
+        old_loc = state["her"]["location"]
+        new_loc = current_routine["location"]
+        
+        if old_loc != new_loc:
+            logger.info(f"🔄 Routine Change: {old_loc} -> {new_loc} ({current_routine['name']})")
+            
+            # Update State
+            state["her"]["location"] = new_loc
+            state["her"]["status"] = current_routine["status"]
+            WorldManager.save_state(state)
+            
+            # 🆕 Generate Proactive Message from Pandu
+            try:
+                # We use a special prompt for proactive messages
+                loc_data = world["locations"].get(new_loc, {})
+                prompt = f"""You are Pandu. You just arrived at {loc_data.get('display_name')}.
+                Context: {current_routine['description']}
+                Surroundings: {', '.join(loc_data.get('objects', []))}
+                
+                Task: Send a short, affectionate proactive message to your boyfriend (1 sentence). 
+                Keep it casual and cute.
+                """
+                response = ollama.generate(model=OLLAMA_MODEL, prompt=prompt)
+                message = response['response'].strip()
+                
+                # Push to sync queue AND notification
+                with queue_lock:
+                    if len(message_queue) < MAX_QUEUE_SIZE:
+                        message_queue.append(message)
+                
+                WorldManager.send_notification(message)
+                
+            except Exception as e:
+                logger.error(f"Failed to generate proactive message: {e}")
+
+    @staticmethod
+    def get_context_block():
+        """
+        Generates the dynamic system prompt block for Pandu.
+        Now includes DYNAMIC TRANSIT SURROUNDINGS.
+        """
+        world = WorldManager.load_json(WorldManager.WORLD_FILE)
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        now = time.time()
+        
+        # --- Location Logic (Static vs Transit) ---
+        her_loc_id = state["her"]["location"]
+        her_loc_data = world["locations"].get(her_loc_id, {})
+        
+        display_location = her_loc_data.get('display_name', 'Unknown')
+        surroundings = ', '.join(her_loc_data.get('objects', []))
+        vibe = her_loc_data.get('vibe', 'neutral')
+        
+        # 🆕 OVERRIDE IF TRAVELING
+        if state["her"].get("destination"):
+            dest_id = state["her"]["destination"]
+            arrival_time = state["her"]["arrival_time"]
+            start_id = state["her"]["location"]
+            
+            # Calculate Progress
+            # We need start_time to calc progress accurately, but for now we can infer remaining time
+            # Or just use raw remaining minutes for context
+            remaining_mins = int((arrival_time - now) / 60)
+            if remaining_mins < 0: remaining_mins = 0
+            
+            # Approximate progress (hack since we didn't store start_time)
+            # Let's just assume total trip was roughly (current + remaining)? No, that changes.
+            # Ideally state should store start_time. 
+            # Fallback: Just ask TransitManager for description based on "Remaining Time" heuristic?
+            # Better: Let's assume progress = 0.5 if we lack data, OR calc based on standard duration.
+            
+            # Re-calc total duration for progress bar
+            _, total_mins = TransitManager.find_path(start_id, dest_id)
+            total_duration = total_mins * 60
+            elapsed = total_duration - (arrival_time - now)
+            progress = max(0.0, min(1.0, elapsed / total_duration)) if total_duration > 0 else 0
+            
+            transit_desc = TransitManager.get_current_surroundings(start_id, dest_id, progress)
+            
+            display_location = f"Walking to {world['locations'][dest_id]['display_name']} ({remaining_mins} min left)"
+            surroundings = f"TRANSIT SIGHTS: {transit_desc}"
+            vibe = "In motion, transitional"
+
+        # --- Time & Magic Logic ---
+        current_hour = datetime.datetime.now().hour
+        is_night = current_hour < 6 or current_hour >= 18
+        time_of_day = "Night" if is_night else "Day"
+        
+        # Magic Flower Logic
+        special_desc = ""
+        if her_loc_id == "flower_spot" and not state["her"].get("destination"):
+            magic = her_loc_data.get("special_logic", {})
+            creature = magic.get("night" if is_night else "day", "")
+            if creature:
+                special_desc = f" You see a {creature} here."
+
+        # --- User Location Logic (The Fog of War) ---
+        user_context = ""
+        if state["user"]["is_together"]:
+            user_context = "User is HERE walking with you." if state["her"].get("destination") else "User is HERE with you."
+        else:
+            last_seen = state["user"]["last_seen_timestamp"]
+            mins_ago = (now - last_seen) / 60 if last_seen else 999
+            user_loc_name = world["locations"].get(state["user"]["location"], {}).get("display_name", "Unknown")
+            
+            # If user is moving
+            if state["user"].get("destination"):
+                 user_dest = world["locations"].get(state["user"]["destination"], {}).get("display_name")
+                 user_context = f"User is currently walking to {user_dest}."
+            elif mins_ago < 30:
+                user_context = f"User is at {user_loc_name}."
+            elif mins_ago < 90:
+                user_context = f"User was at {user_loc_name} an hour ago (Unsure if still there)."
+            else:
+                user_context = "User's location is unknown (Haven't heard in a while)."
+
+        # ═══ NEW: Project Context ═══
+        project_context = ""
+        active_projects = state["her"].get("active_projects", [])
+        if active_projects:
+            project_lines = ["[PERSONAL PROJECTS]"]
+            for proj in active_projects[:3]:  # Show max 3
+                progress_pct = int(proj.get("progress", 0) * 100)
+                status = "STUCK" if proj.get("blocked") else f"{progress_pct}% complete"
+                project_lines.append(f"- {proj['title']}: {status}")
+                
+                if proj.get("blocked"):
+                    project_lines.append(f"  Challenge: {proj.get('current_challenge', 'stuck')}")
+                
+                # Secret projects shouldn't be mentioned unless directly asked
+                # (Logic handled by LLM based on description, but we can hint it here)
+                if proj.get("keep_secret") and not proj.get("revealed"):
+                     project_lines[-1] += " (SECRET - Don't reveal unless asked)"
+            
+            project_context = "\n".join(project_lines)
+        
+        # ═══ NEW: Mood Context ═══
+        mood = state["her"].get("current_mood", "CONTENT")
+        mood_directive = InternalStateManager.generate_mood_influenced_greeting("")
+        
+        # ═══ NEW: Relationship Context ═══
+        rel_directive = RelationshipManager.get_emotional_instruction(mood)
+
+        return f"""
+[CURRENT REALITY]
+- Time: {time_of_day} ({datetime.datetime.now().strftime('%H:%M')})
+- Location: {display_location}
+- Surroundings: {surroundings} ({vibe})
+- User Status: {user_context}
+
+[INTERNAL STATE]
+- Current Mood: {mood}
+- Mood Directive: {mood_directive}
+- Relationship Directive: {rel_directive}
+
+{project_context}
+"""
+
+# --- CORE MEMORY INTELLIGENCE ---
+class MemoryManager:
+    """Handles lifecycle, retrieval, and decay of contextual memories."""
+    
+    @staticmethod
+    def calculate_relevance(created_at: float, access_count: int, last_accessed: float) -> float:
+        """
+        Relevance Decay Formula: Score = Base * TimeDecay * AccessBoost
+        - Older memories naturally decay
+        - Frequently accessed memories stay relevant
+        """
+        age_in_days = (datetime.datetime.now().timestamp() - created_at) / 86400
+        decay_factor = 1 / (1 + (DECAY_RATE * age_in_days))
+        boost_factor = 1 + (access_count * ACCESS_BOOST)
+        return round(BASE_RELEVANCE * decay_factor * boost_factor, 4)
+    
+    @staticmethod
+    def detect_followup(text: str) -> tuple[bool, float]:
+        """
+        Heuristic-based follow-up detection.
+        Returns: (needs_followup, timestamp_to_check)
+        """
+        text = text.lower()
+        now = datetime.datetime.now()
+        
+        # Temporal keywords
+        if "tomorrow" in text:
+            return True, (now + datetime.timedelta(days=1)).timestamp()
+        if "next week" in text:
+            return True, (now + datetime.timedelta(days=7)).timestamp()
+        if "in 2 days" in text or "day after tomorrow" in text:
+            return True, (now + datetime.timedelta(days=2)).timestamp()
+        
+        # Intent keywords
+        if any(x in text for x in ["remind me", "don't forget", "i have a", "going to", "plan to", "need to"]):
+            return True, (now + datetime.timedelta(days=1)).timestamp()
+        
+        return False, 0.0
+    
+    @staticmethod
+    def classify_memory_type(text: str) -> str:
+        """Categorizes memory into types for better retrieval."""
+        text = text.lower()
+        
+        if any(x in text for x in ["i like", "i love", "i prefer", "i hate", "favorite"]):
+            return "preference"
+        elif any(x in text for x in ["i am", "my name", "i work", "i live", "i study"]):
+            return "identity"
+        elif any(x in text for x in ["i feel", "feeling", "sad", "happy", "excited", "worried"]):
+            return "emotion"
+        elif any(x in text for x in ["tomorrow", "next week", "plan", "going to", "will"]):
+            return "future_plan"
+        elif any(x in text for x in ["remember", "important", "don't forget"]):
+            return "important"
+        else:
+            return "general"
+    
+    # 🆕 AUTO-LINKING METHOD
+    @staticmethod
+    def auto_link_similar(new_memory_id: str):
+        """
+        Automatically link new memory to highly similar existing memories.
+        Uses vector similarity to find related memories and creates bidirectional links.
+        NOW WITH PROPER MAXIMUM LINK LIMIT!
+        """
+        try:
+            # Get the new memory
+            new_mem = collection.get(ids=[new_memory_id])
+            if not new_mem['documents'] or not new_mem['metadatas']:
+                return
+            
+            new_text = new_mem['documents'][0]
+            new_meta = new_mem['metadatas'][0]
+            
+            # Find similar memories using vector search
+            results = collection.query(
+                query_texts=[new_text],
+                n_results=AUTO_LINK_MAX_CANDIDATES + 1,  # +1 because it includes itself
+                where={"status": "active"}
+            )
+            
+            if not results['ids'] or not results['ids'][0]:
+                return
+            
+            # Get existing related IDs
+            new_related = json.loads(new_meta.get("related_ids", "[]"))
+            
+            # 🆕 Build list of candidates with their similarity scores
+            candidates = []
+            
+            # Process similar memories
+            for i, similar_id in enumerate(results['ids'][0]):
+                # Skip self
+                if similar_id == new_memory_id:
+                    continue
+                
+                # Skip if already linked
+                if similar_id in new_related:
+                    continue
+                
+                # Get distance/similarity score
+                distance = results['distances'][0][i] if 'distances' in results else 1.0
+                similarity = 1.0 - distance
+                
+                # Only consider if similarity exceeds threshold
+                if similarity >= AUTO_LINK_SIMILARITY_THRESHOLD:
+                    candidates.append((similar_id, similarity))
+            
+            # 🆕 Sort by similarity descending and take ONLY top N
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            top_candidates = candidates[:AUTO_LINK_MAX_LINKS]
+            
+            links_created = 0
+            
+            # Create links for top candidates only
+            for similar_id, similarity in top_candidates:
+                # Add to new memory's related list
+                new_related.append(similar_id)
+                
+                # Update target memory's related list (bidirectional)
+                try:
+                    target_mem = collection.get(ids=[similar_id])
+                    if target_mem['metadatas']:
+                        target_meta = target_mem['metadatas'][0]
+                        target_related = json.loads(target_meta.get("related_ids", "[]"))
+                        
+                        if new_memory_id not in target_related:
+                            target_related.append(new_memory_id)
+                            target_meta["related_ids"] = json.dumps(target_related)
+                            collection.update(ids=[similar_id], metadatas=[target_meta])
+                        
+                        links_created += 1
+                        logger.info(f"   🔗 Linked to {similar_id[:8]}... (similarity: {similarity:.3f})")
+                
+                except Exception as e:
+                    logger.warning(f"Failed to update target memory {similar_id}: {e}")
+            
+            # Update new memory with all links
+            if new_related != json.loads(new_meta.get("related_ids", "[]")):
+                new_meta["related_ids"] = json.dumps(new_related)
+                collection.update(ids=[new_memory_id], metadatas=[new_meta])
+            
+            if links_created > 0:
+                logger.info(f"✅ Auto-linked {links_created} similar memor{'y' if links_created == 1 else 'ies'} to {new_memory_id[:8]}...")
+            else:
+                logger.info(f"ℹ️  No suitable links found for {new_memory_id[:8]}...")
+        
+        except Exception as e:
+            logger.error(f"Auto-link failed for {new_memory_id}: {e}")
+
+    
+    @staticmethod
+    def save(text: str, context_chain_id: str = None):
+        """Saves new memory with intelligent metadata."""
+        needs_followup, followup_date = MemoryManager.detect_followup(text)
+        mem_type = MemoryManager.classify_memory_type(text)
+        mem_id = str(uuid.uuid4())
+        timestamp = datetime.datetime.now().timestamp()
+        
+        metadata = {
+            "timestamp": timestamp,
+            "type": mem_type,
+            "status": "active",
+            "relevance_score": 1.0,
+            "access_count": 0,
+            "last_accessed": timestamp,
+            "related_ids": json.dumps([]),
+            "context_chain": context_chain_id or str(uuid.uuid4()),
+            "needs_followup": needs_followup,
+            "followup_date": followup_date or 0.0
+        }
+        
+        collection.add(documents=[text], metadatas=[metadata], ids=[mem_id])
+        logger.info(f"💾 Saved [{mem_type}]: {text[:50]}...")
+        
+        # 🆕 AUTO-LINK SIMILAR MEMORIES
+        MemoryManager.auto_link_similar(mem_id)
+        
+        return mem_id
+    
+    @staticmethod
+    def smart_recall(query: str, context_chain_id: str = None, limit: int = 5) -> str:
+        """
+        Multi-stage contextual retrieval:
+        1. Vector similarity search
+        2. Graph traversal (related memories)
+        3. Conversation thread context
+        4. Relevance ranking and access tracking
+        """
+        # Stage 1: Vector Search (Semantic Similarity)
+        try:
+            results = collection.query(
+                query_texts=[query],
+                n_results=limit,
+                where={"status": "active"}
+            )
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}")
+            return ""
+        
+        found_docs, found_ids, found_metas = [], [], []
+        if results['ids'] and results['ids'][0]:
+            found_docs = results['documents'][0]
+            found_ids = results['ids'][0]
+            found_metas = results['metadatas'][0]
+        
+        # Stage 2: Graph Traversal (Linked Memories)
+        extra_ids = []
+        for meta in found_metas:
+            try:
+                related = json.loads(meta.get("related_ids", "[]"))
+                extra_ids.extend(related)
+            except:
+                pass
+        
+        # Stage 3: Conversation Thread Context
+        if context_chain_id:
+            try:
+                chain_res = collection.get(where={"context_chain": context_chain_id})
+                if chain_res['ids']:
+                    # Sort by timestamp DESC (ChromaDB doesn't support ORDER BY)
+                    sorted_chain = sorted(
+                        zip(chain_res['ids'], chain_res['metadatas']),
+                        key=lambda x: x[1].get('timestamp', 0),
+                        reverse=True
+                    )
+                    # Add last 3 conversation items
+                    for uid, _ in sorted_chain[:3]:
+                        if uid not in found_ids:
+                            extra_ids.append(uid)
+            except Exception as e:
+                logger.warning(f"Chain fetch error: {e}")
+        
+        # Fetch additional documents (graph + thread)
+        unique_extra = list(set([uid for uid in extra_ids if uid not in found_ids]))
+        if unique_extra:
+            try:
+                related_mems = collection.get(ids=unique_extra)
+                if related_mems['documents']:
+                    found_docs.extend(related_mems['documents'])
+                    found_metas.extend(related_mems['metadatas'])
+                    found_ids.extend(related_mems['ids'])
+            except Exception as e:
+                logger.warning(f"Related fetch error: {e}")
+        
+        # Stage 4: Update Access Stats & Rerank
+        final_memories = []
+        current_time = datetime.datetime.now().timestamp()
+        ids_to_update, metas_to_update = [], []
+        
+        for i, doc in enumerate(found_docs):
+            meta = found_metas[i]
+            uid = found_ids[i]
+            new_count = meta.get('access_count', 0) + 1
+            new_relevance = MemoryManager.calculate_relevance(
+                meta['timestamp'], new_count, current_time
+            )
+            
+            # Prepare batch update
+            meta_update = {
+                **meta,
+                "access_count": new_count,
+                "last_accessed": current_time,
+                "relevance_score": new_relevance
+            }
+            ids_to_update.append(uid)
+            metas_to_update.append(meta_update)
+            final_memories.append((doc, new_relevance, meta.get('type', 'general')))
+        
+        # Batch update for performance
+        if ids_to_update:
+            try:
+                collection.update(ids=ids_to_update, metadatas=metas_to_update)
+            except Exception as e:
+                logger.error(f"Batch update failed: {e}")
+        
+        # Sort by relevance DESC
+        final_memories.sort(key=lambda x: x[1], reverse=True)
+        
+        # Format context for LLM
+        context_parts = []
+        for doc, score, mem_type in final_memories[:7]:
+            context_parts.append(f"[{mem_type}] {doc}")
+        
+        return "\n".join(context_parts)
+    
+    @staticmethod
+    def cleanup_safe(batch_size: int = 100):
+        """
+        Batched cleanup to prevent memory overload.
+        Archives old, low-relevance memories.
+        """
+        logger.info("🧹 Running memory cleanup...")
+        six_months_ago = (datetime.datetime.now() - datetime.timedelta(days=180)).timestamp()
+        
+        try:
+            # Only fetch OLD active memories
+            results = collection.get(
+                where={
+                    "$and": [
+                        {"status": "active"},
+                        {"timestamp": {"$lt": six_months_ago}}
+                    ]
+                },
+                limit=batch_size
+            )
+            
+            if not results['ids']:
+                logger.info("✅ Cleanup complete: No stale memories found.")
+                return
+            
+            ids_to_archive, metas_to_archive = [], []
+            for i, uid in enumerate(results['ids']):
+                meta = results['metadatas'][i]
+                score = MemoryManager.calculate_relevance(
+                    meta['timestamp'],
+                    meta['access_count'],
+                    meta['last_accessed']
+                )
+                
+                # Archive criteria:
+                # 1. Very low relevance (< 0.2)
+                # 2. Medium relevance but never accessed (< 0.5 + access_count == 0)
+                if score < 0.2 or (score < 0.5 and meta['access_count'] == 0):
+                    new_meta = {**meta, "status": "archived", "relevance_score": score}
+                    ids_to_archive.append(uid)
+                    metas_to_archive.append(new_meta)
+            
+            if ids_to_archive:
+                collection.update(ids=ids_to_archive, metadatas=metas_to_archive)
+                logger.info(f"📦 Archived {len(ids_to_archive)} stale memories.")
+        
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+
+# --- BACKGROUND AUTOMATION ---
+def process_pending_followups():
+    """Checks for due follow-ups and queues reminder messages."""
+    now = datetime.datetime.now().timestamp()
+    try:
+        results = collection.get(
+            where={
+                "$and": [
+                    {"needs_followup": True},
+                    {"status": "active"},
+                    {"followup_date": {"$lte": now}}
+                ]
+            }
+        )
+        
+        if not results['ids']:
+            return
+        
+        count = 0
+        for i, doc in enumerate(results['documents']):
+            uid = results['ids'][i]
+            meta = results['metadatas'][i]
+            
+            # Generate contextual reminder
+            msg = f"hey babe! just checking in... you said: '{doc[:100]}' - how'd that go? 💕"
+            
+            # Send Notification
+            WorldManager.send_notification(msg, title="Pandu checking in...")
+            
+            # Thread-safe queue append
+            with queue_lock:
+                if len(message_queue) < MAX_QUEUE_SIZE:
+                    message_queue.append(msg)
+                    count += 1
+            
+            # Mark as handled
+            meta['needs_followup'] = False
+            collection.update(ids=[uid], metadatas=[meta])
+        
+        if count > 0:
+            logger.info(f"📬 Auto-queued {count} follow-up reminder(s).")
+    
+    except Exception as e:
+        logger.error(f"Follow-up check failed: {e}")
+
+def background_maintenance_loop():
+    """Autonomous life simulation - runs continuously"""
+    logger.info("⏰ Background maintenance thread started")
+    
+    last_cleanup = time.time()
+    last_project_update = time.time()
+    last_mood_update = time.time()
+    last_thought_generation = time.time()
+    last_routine_sync = time.time()
+    last_relationship_audit = time.time()
+    last_weekly_audit = time.time()
+    
+    while not shutdown_flag.is_set():
+        try:
+            now = time.time()
+            
+            # 🛑 SMART LOCKING: Check if user is active
+            # If user chatted in last 60s, PAUSE background LLM tasks to prevent model swapping
+            state = WorldManager.load_json(WorldManager.STATE_FILE)
+            last_seen = state["user"].get("last_seen_timestamp", 0)
+            user_is_active = (now - last_seen) < 60
+            
+            # 🔄 TRANSIT CHECK (Frequent)
+            WorldManager.process_transit()
+            
+            # ═══════════════════════════════════════════════════
+            # TASK 0: Relationship Audit (Daily & Weekly)
+            # ═══════════════════════════════════════════════════
+            if now - last_relationship_audit >= 86400: # Daily "Slow Burn"
+                RelationshipManager.daily_audit()
+                last_relationship_audit = now
+
+            if now - last_weekly_audit >= 604800: # Weekly "Gemini Deep Dive"
+                if not user_is_active:
+                    RelationshipManager.weekly_audit()
+                    last_weekly_audit = now
+
+            # ═══════════════════════════════════════════════════
+            # TASK 1: Routine Sync (every 5 minutes)
+            # This is lightweight (no LLM usually), so safe to run? 
+            # Actually, sync_simulation uses LLM for proactive msg. So pause it too.
+            # ═══════════════════════════════════════════════════
+            if now - last_routine_sync >= ROUTINE_SYNC_INTERVAL:
+                if not user_is_active:
+                    WorldManager.sync_simulation()
+                    last_routine_sync = now
+                else:
+                    logger.info("⏳ User active, skipping Routine Sync to save GPU...")
+            
+            # ═══════════════════════════════════════════════════
+            # TASK 2: Project Updates (every 30 minutes)
+            # ═══════════════════════════════════════════════════
+            if now - last_project_update >= PROJECT_UPDATE_INTERVAL:
+                if not user_is_active:
+                    ProjectManager.update_all_projects()
+                    last_project_update = now
+                else:
+                    logger.info("⏳ User active, skipping Project Update...")
+            
+            # ═══════════════════════════════════════════════════
+            # TASK 3: Mood Calculation (every hour)
+            # ═══════════════════════════════════════════════════
+            if now - last_mood_update >= MOOD_UPDATE_INTERVAL:
+                if not user_is_active:
+                    InternalStateManager.calculate_mood()
+                    last_mood_update = now
+            
+            # ═══════════════════════════════════════════════════
+            # TASK 4: Random Thoughts (every 2-6 hours, randomized)
+            # ═══════════════════════════════════════════════════
+            if now - last_thought_generation >= THOUGHT_GENERATION_MIN:
+                 elapsed = now - last_thought_generation
+                 chance = (elapsed - THOUGHT_GENERATION_MIN) / (THOUGHT_GENERATION_MAX - THOUGHT_GENERATION_MIN)
+                 
+                 # Only trigger if user NOT active
+                 if not user_is_active:
+                     if random.random() < chance or elapsed >= THOUGHT_GENERATION_MAX:
+                        thought_message = InternalStateManager.generate_random_thought()
+                        
+                        if thought_message:
+                            with queue_lock:
+                                if len(message_queue) < MAX_QUEUE_SIZE:
+                                    message_queue.append(thought_message)
+                            WorldManager.send_notification(thought_message, title="Pandu 💭")
+                        
+                        last_thought_generation = now
+            
+            # ═══════════════════════════════════════════════════
+            # TASK 5: Follow-up Reminders (every 5 minutes)
+            # ═══════════════════════════════════════════════════
+            # This is just DB check, safe to run even if active
+            process_pending_followups()
+            
+            # ═══════════════════════════════════════════════════
+            # TASK 6: Memory Cleanup (every 4 hours)
+            # ═══════════════════════════════════════════════════
+            if now - last_cleanup >= CLEANUP_INTERVAL:
+                MemoryManager.cleanup_safe()
+                last_cleanup = now
+            
+        except Exception as e:
+            logger.error(f"Background loop error: {e}")
+        
+        # Sleep loop
+        for _ in range(60): 
+             if shutdown_flag.is_set():
+                break
+             time.sleep(1) # Faster check
+             if shutdown_flag.is_set(): break
+             # Re-check user activity every second? No, just sleep.
+             if _ % 5 == 0: pass # Placeholder
+
+    logger.info("🛑 Background thread stopped gracefully")
+
+def shutdown_handler(signum, frame):
+    """Handle SIGINT (Ctrl+C) and SIGTERM gracefully."""
+    logger.info("\n🛑 Shutdown signal received. Cleaning up...")
+    shutdown_flag.set()
+    sys.exit(0)
+
+# --- API ENDPOINTS ---
+@app.post("/chat")
+async def chat(
+    request: ChatRequest,
+    background_tasks: BackgroundTasks,
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Main chat endpoint with Full Context Awareness (World + Memory + Autonomy).
+    """
+    try:
+        # 0. 🆕 UPDATE WORLD STATE (Intent Parsing)
+        WorldManager.update_world_state(request.message)
+        
+        # 1. Retrieve relevant context (Must be synchronous for RAG)
+        memory_context = MemoryManager.smart_recall(
+            request.message,
+            request.context_chain_id,
+            limit=5  # Reduced from 7 for speed
+        )
+        
+        # 2. Save user message (MOVED TO BACKGROUND)
+        background_tasks.add_task(
+            MemoryManager.save,
+            request.message,
+            request.context_chain_id
+        )
+
+        # 3. 🆕 CONSTRUCT DYNAMIC SYSTEM PROMPT
+        world_context = WorldManager.get_context_block()
+        
+        # Handle user influence on projects
+        if "project" in request.message.lower() or "stuck" in request.message.lower():
+            background_tasks.add_task(
+                ProjectManager.check_user_encouragement,
+                request.message,
+                memory_context
+            )
+        
+        current_mood = request.mood  # Optional override from request
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        
+        # Update last seen timestamp NOW (so background thread knows to pause)
+        state["user"]["last_seen_timestamp"] = time.time()
+        WorldManager.save_state(state)
+        
+        # If no override, use internal state
+        if not current_mood:
+            current_mood = state["her"].get("current_mood", "CONTENT")
+            
+        if request.tone_instruction:
+            # Active Emotional Override (The "Director's Notes")
+            personality_block = f"""
+[CURRENT EMOTIONAL STATE]
+- Mood: {current_mood}
+- COMPULSORY INSTRUCTION: {request.tone_instruction}
+"""
+        else:
+             # Standard Personality
+             personality_block = """
+[PERSONALITY DIRECTIVES]
+- You are Pandu - warm, intelligent, independent, affectionate
+- You have your own life, goals, and struggles
+- Mention projects naturally if relevant to conversation
+- Don't be needy, but express genuine feelings
+- Use lowercase, emojis naturally (💕 🥺 😊 😤 🎉)
+- Keep responses 1-3 sentences unless deeper conversation
+"""
+
+        # Assemble the final prompt
+        system_prompt = f"""You are Pandu.
+        
+{world_context}
+
+{personality_block}
+
+[RELEVANT MEMORIES]
+{memory_context}
+
+[CONVERSATION CONTEXT]
+User just said: "{request.message}"
+
+[RESPONSE GUIDELINES]
+- Respond naturally to what the user said
+- Reference projects/mood if contextually relevant
+- Show your personality through the current mood state
+- Build on conversation history
+- Be authentic - if stuck on something, you can mention it
+- If user offers help/encouragement, respond warmly
+- NEVER mention "database", "memory system", "mood settings", or meta-concepts
+"""
+        
+        # 4. Prepare messages for Ollama
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ] + request.history + [
+            {"role": "user", "content": request.message}
+        ]
+        
+        # 5. Get response from Ollama
+        response = ollama.chat(model=OLLAMA_MODEL, messages=messages)
+        reply = response['message']['content']
+        
+        # Save assistant response to memory (MOVED TO BACKGROUND)
+        background_tasks.add_task(
+            MemoryManager.save,
+            reply,
+            request.context_chain_id
+        )
+
+        return {
+            "reply": reply,
+            "context_used": bool(memory_context),
+            "status": "success",
+            "memory_id": "queued", # ID generation moved to background, so we can't return it immediately
+            "current_mood": current_mood,
+            "mood_echo": current_mood,
+            "active_projects_count": len(state["her"].get("active_projects", []))
+        }
+
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        return {
+            "reply": "...", # If she crashes, silence is better than a robot error
+            "status": "error"
+        }
+
+# --- PROJECT STUDIO ENDPOINTS ---
+
+@app.post("/project/chat")
+async def project_chat(
+    request: ProjectChatRequest,
+    background_tasks: BackgroundTasks,
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Dedicated workspace for collaborating on projects.
+    - Persona: Professional, Focused, Ambitious.
+    - Memory: Logs to 'Brainstorming' file + ChromaDB.
+    """
+    try:
+        # 1. Identify Project
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        project = next((p for p in state["her"].get("active_projects", []) if p["id"] == request.project_id or p["title"] == request.project_id), None)
+        
+        if not project:
+            raise HTTPException(404, "Project not found")
+            
+        # Map IDs to Files
+        title = project["title"]
+        file_base = ""
+        if "Quantum" in title: file_base = "quantum"
+        elif "Echoes" in title: file_base = "silicon"
+        elif "Gita" in title: file_base = "gita"
+        else: raise HTTPException(400, "Unknown project type for file mapping")
+        
+        scratchpad_file = f"projects/{file_base}_brainstorm.txt"
+        ledger_file = f"projects/{project['title'].lower().replace(' ', '_')}.md"
+        
+        # 2. Build Context (Read Ledger Tail)
+        ledger_context = ""
+        if os.path.exists(ledger_file):
+            with open(ledger_file, "r") as f:
+                content = f.read()
+                ledger_context = content[-1500:] if len(content) > 1500 else content
+        
+        # 3. Construct Collaborator Persona
+        system_prompt = f"""You are Pandu, acting as a Lead Collaborator on the project: "{title}".
+        
+[ROLE]
+- Tone: Professional, intellectual, sharp, focused.
+- Goal: Advance the project, solve problems, brainstorm details.
+- User Role: Your Co-Author / Lead Scientist.
+- No "small talk" or casual relationship chatter. Stay in the zone.
+
+[PROJECT STATUS]
+- Progress: {int(project.get("progress", 0)*100)}%
+- Current Context (from Official Ledger):
+{ledger_context}
+
+[INSTRUCTION]
+Respond to the collaborator's idea/question. Be constructive and specific.
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ] + request.history + [
+            {"role": "user", "content": request.message}
+        ]
+        
+        # 4. Generate Reply
+        response = ollama.chat(model=OLLAMA_MODEL, messages=messages)
+        reply = response['message']['content']
+        
+        # 5. Dual-Logging
+        
+        # A. Append to Scratchpad (The Whiteboard)
+        with open(scratchpad_file, "a") as f:
+            f.write(f"\nUser: {request.message}\nPandu: {reply}\n")
+            
+        # B. Save to Vector Memory (The Brain)
+        MemoryManager.save(
+            f"Project Chat [{title}]: {request.message} -> {reply}",
+            context_chain_id=f"proj_{request.project_id}"
+        )
+        
+        return {
+            "reply": reply,
+            "status": "success",
+            "project_title": title
+        }
+
+    except Exception as e:
+        logger.error(f"Project chat error: {e}")
+        raise HTTPException(500, str(e))
+
+@app.post("/project/synthesize")
+async def project_synthesize(
+    request: ProjectSynthesisRequest,
+    api_key: str = Security(verify_api_key)
+):
+    """
+    The 'Advance Project' Button.
+    Uses Gemini to distill the scratchpad into a formal ledger entry.
+    """
+    try:
+        # 1. Identify Project & Files
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        project = next((p for p in state["her"].get("active_projects", []) if p["id"] == request.project_id or p["title"] == request.project_id), None)
+        
+        if not project:
+            raise HTTPException(404, "Project not found")
+            
+        title = project["title"]
+        file_base = ""
+        if "Quantum" in title: file_base = "quantum"
+        elif "Echoes" in title: file_base = "silicon"
+        elif "Gita" in title: file_base = "gita"
+        
+        scratchpad_file = f"projects/{file_base}_brainstorm.txt"
+        
+        # Fix ledger filename logic to match previous usage
+        # Earlier we used specific names manually. Let's standarize map.
+        if "Quantum" in title: ledger_file = "projects/quantum_neural_network.md"
+        elif "Echoes" in title: ledger_file = "projects/echoes_of_silicon.md"
+        elif "Gita" in title: ledger_file = "projects/bhagavad_gita_study.md"
+        else: ledger_file = f"projects/{file_base}_ledger.md"
+
+        if not os.path.exists(scratchpad_file):
+            return {"status": "empty", "message": "No brainstorming notes to synthesize."}
+            
+        with open(scratchpad_file, "r") as f:
+            notes = f.read()
+            
+        if len(notes.strip()) < 10:
+             return {"status": "empty", "message": "Notes too short to synthesize."}
+
+        # 2. Call Gemini
+        prompt = f"""You are the Project Lead for '{title}'.
+        
+        Here are the raw brainstorming notes from the latest session between the AI and the User:
+        ---
+        {notes}
+        ---
+        
+        TASK:
+        Distill these notes into a FORMAL, high-quality entry for the official project log.
+        - Discard conversational filler ("I agree", "maybe").
+        - Keep concrete decisions, equations, plot points, or philosophical realizations.
+        - Format it beautifully (Markdown).
+        """
+        
+        logger.info(f"🧬 Synthesizing project {title}...")
+        
+        result = subprocess.run(
+            ["gemini", prompt],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        if result.returncode == 0:
+            formal_entry = result.stdout.strip()
+            
+            # 3. Update Ledger
+            with open(ledger_file, "a") as f:
+                f.write(f"\n\n## Session Synthesis {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+                f.write(formal_entry)
+            
+            # 4. Wipe Scratchpad (The "Clean Whiteboard" step)
+            with open(scratchpad_file, "w") as f:
+                f.write("")
+                
+            # 5. Advance Progress
+            project["progress"] = min(1.0, project.get("progress", 0) + 0.05)
+            project["last_update"] = time.time()
+            WorldManager.save_state(state)
+            
+            return {
+                "status": "success", 
+                "message": "Project advanced.",
+                "new_progress": project["progress"]
+            }
+        else:
+            raise HTTPException(500, f"Gemini synthesis failed: {result.stderr}")
+
+    except Exception as e:
+        logger.error(f"Synthesis error: {e}")
+        raise HTTPException(500, str(e))
+
+@app.post("/memory/link")
+async def link_memories(
+    req: MemoryLinkRequest,
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Create bidirectional link between two memories.
+    Enables graph-based memory traversal.
+    """
+    try:
+        # Link A → B
+        src_res = collection.get(ids=[req.source_id])
+        if not src_res['ids']:
+            raise HTTPException(404, "Source memory not found")
+        
+        src_meta = src_res['metadatas'][0]
+        src_related = json.loads(src_meta.get("related_ids", "[]"))
+        
+        if req.target_id not in src_related:
+            src_related.append(req.target_id)
+            src_meta["related_ids"] = json.dumps(src_related)
+            collection.update(ids=[req.source_id], metadatas=[src_meta])
+        
+        # Link B → A (Bidirectional)
+        tgt_res = collection.get(ids=[req.target_id])
+        if not tgt_res['ids']:
+            raise HTTPException(404, "Target memory not found")
+        
+        tgt_meta = tgt_res['metadatas'][0]
+        tgt_related = json.loads(tgt_meta.get("related_ids", "[]"))
+        
+        if req.source_id not in tgt_related:
+            tgt_related.append(req.source_id)
+            tgt_meta["related_ids"] = json.dumps(tgt_related)
+            collection.update(ids=[req.target_id], metadatas=[tgt_meta])
+        
+        logger.info(f"🔗 Linked memories: {req.source_id} ↔ {req.target_id}")
+        return {"status": "linked_bidirectional"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Link error: {e}")
+        raise HTTPException(500, detail=str(e))
+
+@app.post("/memory/resolve")
+async def resolve_memory(
+    memory_id: str = Query(..., description="Memory ID to mark as resolved"),
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Mark a memory (usually a plan/task) as resolved/completed.
+    Stops follow-up reminders for this memory.
+    """
+    try:
+        res = collection.get(ids=[memory_id])
+        if not res['ids']:
+            raise HTTPException(404, "Memory not found")
+        
+        meta = res['metadatas'][0]
+        meta['status'] = 'resolved'
+        meta['needs_followup'] = False
+        collection.update(ids=[memory_id], metadatas=[meta])
+        
+        logger.info(f"✅ Resolved memory: {memory_id}")
+        return {"status": "resolved", "id": memory_id}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resolve error: {e}")
+        raise HTTPException(500, detail=str(e))
+
+@app.get("/memory/search")
+async def search_memories(
+    q: str = Query(..., description="Search query"),
+    limit: int = Query(10, ge=1, le=50),
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Semantic search across all memories.
+    Useful for debugging or manual memory lookups.
+    """
+    try:
+        results = collection.query(query_texts=[q], n_results=limit)
+        
+        if not results['ids'] or not results['ids'][0]:
+            return {"results": [], "count": 0, "query": q}
+        
+        items = [
+            {
+                "id": uid,
+                "text": doc,
+                "relevance": meta.get('relevance_score', 0),
+                "type": meta.get('type', 'unknown'),
+                "status": meta.get('status', 'unknown')
+            }
+            for uid, doc, meta in zip(
+                results['ids'][0],
+                results['documents'][0],
+                results['metadatas'][0]
+            )
+        ]
+        
+        return {"results": items, "count": len(items), "query": q}
+    
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        raise HTTPException(500, detail=str(e))
+
+@app.get("/memories/dashboard")
+async def dashboard(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    type: Optional[str] = Query(None, description="Filter by memory type"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Paginated memory dashboard for management and analytics.
+    """
+    try:
+        # Build filter
+        where = {}
+        if status: where["status"] = status
+        if type: where["type"] = type
+        
+        # Get filtered results
+        results = collection.get(where=where if where else None)
+        total = len(results['ids'])
+        start = (page - 1) * limit
+        end = start + limit
+        
+        # Paginate
+        items = [
+            {
+                "id": uid,
+                "text": doc,
+                "type": meta.get('type'),
+                "status": meta.get('status'),
+                "relevance": meta.get('relevance_score'),
+                "access_count": meta.get('access_count'),
+                "created": datetime.datetime.fromtimestamp(meta.get('timestamp', 0)).isoformat()
+            }
+            for uid, doc, meta in zip(
+                results['ids'][start:end],
+                results['documents'][start:end],
+                results['metadatas'][start:end]
+            )
+        ]
+        
+        # Calculate stats
+        active = sum(1 for m in results['metadatas'] if m.get('status') == 'active')
+        archived = sum(1 for m in results['metadatas'] if m.get('status') == 'archived')
+        resolved = sum(1 for m in results['metadatas'] if m.get('status') == 'resolved')
+        
+        return {
+            "items": items,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "has_more": end < total
+            },
+            "stats": {
+                "total": total,
+                "active": active,
+                "archived": archived,
+                "resolved": resolved
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        raise HTTPException(500, detail=str(e))
+# Add this endpoint before the startup section
+@app.post("/admin/rebuild-links")
+async def rebuild_all_links(
+    max_links: int = Query(3, ge=1, le=10, description="Max links per memory"),
+    threshold: float = Query(0.50, ge=0.3, le=0.95, description="Similarity threshold"),
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Rebuild all memory links with new parameters.
+    Creates BIDIRECTIONAL links properly.
+    """
+    try:
+        logger.info(f"🔧 Starting link rebuild: max_links={max_links}, threshold={threshold}")
+        
+        all_mems = collection.get(where={"status": "active"})
+        
+        if not all_mems['ids']:
+            return {"status": "no_memories"}
+        
+        total_links_before = 0
+        
+        # First pass: Clear all existing links and count
+        for i, mem_id in enumerate(all_mems['ids']):
+            meta = all_mems['metadatas'][i]
+            old_links = json.loads(meta.get("related_ids", "[]"))
+            total_links_before += len(old_links)
+            
+            # Clear links
+            meta["related_ids"] = json.dumps([])
+            collection.update(ids=[mem_id], metadatas=[meta])
+        
+        logger.info(f"   Cleared {total_links_before} existing links")
+        
+        # 🆕 SECOND PASS: Build similarity matrix for ALL pairs
+        all_links = {}  # mem_id -> [(other_id, similarity), ...]
+        
+        for i, mem_id in enumerate(all_mems['ids']):
+            text = all_mems['documents'][i]
+            
+            # Query for similar memories
+            results = collection.query(
+                query_texts=[text],
+                n_results=min(20, len(all_mems['ids'])),
+                where={"status": "active"}
+            )
+            
+            if not results['ids'] or not results['ids'][0]:
+                continue
+            
+            # Build candidate list for this memory
+            candidates = []
+            for j, other_id in enumerate(results['ids'][0]):
+                if other_id == mem_id:
+                    continue
+                
+                distance = results['distances'][0][j] if 'distances' in results else 1.0
+                similarity = 1.0 - distance
+                
+                if similarity >= threshold:
+                    candidates.append((other_id, similarity))
+            
+            # Sort by similarity and store
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            all_links[mem_id] = candidates[:max_links]
+        
+        # 🆕 THIRD PASS: Create bidirectional links
+        final_links = {mem_id: [] for mem_id in all_mems['ids']}
+        processed_pairs = set()
+        
+        for mem_id, links in all_links.items():
+            for other_id, similarity in links:
+                # Create unique pair ID (sorted to avoid duplicates)
+                pair = tuple(sorted([mem_id, other_id]))
+                
+                if pair in processed_pairs:
+                    continue
+                
+                # Add bidirectional link
+                final_links[mem_id].append(other_id)
+                final_links[other_id].append(mem_id)
+                processed_pairs.add(pair)
+                
+                logger.info(f"   🔗 Linked {mem_id[:8]} ↔ {other_id[:8]} (sim: {similarity:.3f})")
+        
+        # 🆕 FOURTH PASS: Update database with final links
+        total_links_after = 0
+        for mem_id in all_mems['ids']:
+            # Limit to max_links per memory
+            links = final_links[mem_id][:max_links]
+            
+            # Get metadata
+            mem_data = collection.get(ids=[mem_id])
+            if mem_data['metadatas']:
+                meta = mem_data['metadatas'][0]
+                meta["related_ids"] = json.dumps(links)
+                collection.update(ids=[mem_id], metadatas=[meta])
+                total_links_after += len(links)
+        
+        avg_before = round(total_links_before / len(all_mems['ids']), 2) if all_mems['ids'] else 0
+        avg_after = round(total_links_after / len(all_mems['ids']), 2) if all_mems['ids'] else 0
+        
+        logger.info(f"✅ Rebuild complete!")
+        logger.info(f"   Before: {total_links_before} links ({avg_before} avg)")
+        logger.info(f"   After: {total_links_after} links ({avg_after} avg)")
+        logger.info(f"   Unique pairs: {len(processed_pairs)}")
+        
+        return {
+            "status": "success",
+            "memories_processed": len(all_mems['ids']),
+            "total_links_before": total_links_before,
+            "total_links_after": total_links_after,
+            "unique_pairs": len(processed_pairs),
+            "avg_links_before": avg_before,
+            "avg_links_after": avg_after,
+            "reduction_percent": round(100 * (1 - total_links_after/total_links_before), 1) if total_links_before > 0 else 0
+        }
+    
+    except Exception as e:
+        logger.error(f"Rebuild failed: {e}")
+        raise HTTPException(500, detail=str(e))
+        
+@app.get("/memory/{memory_id}")
+async def get_memory_by_id(
+    memory_id: str,
+    api_key: str = Security(verify_api_key)
+):
+    """
+    Get a specific memory by ID with all metadata including related_ids.
+    """
+    try:
+        result = collection.get(
+            ids=[memory_id],
+            include=["documents", "metadatas"]
+        )
+        
+        if not result['ids']:
+            raise HTTPException(404, detail="Memory not found")
+        
+        meta = result['metadatas'][0]
+        
+        return {
+            "id": result['ids'][0],
+            "text": result['documents'][0],
+            "type": meta.get("type", "general"),
+            "status": meta.get("status", "active"),
+            "created": meta.get("created"),
+            "relevance": float(meta.get("relevance", 0)),
+            "access_count": int(meta.get("access_count", 0)),
+            "related_ids": json.loads(meta.get("related_ids", "[]"))
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch memory {memory_id}: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@app.get("/stats")
+async def get_stats(api_key: str = Security(verify_api_key)):
+    """
+    Memory analytics and insights.
+    """
+    try:
+        all_mems = collection.get()
+        if not all_mems['ids']:
+            return {"message": "No memories stored yet"}
+        
+        # Type breakdown
+        types = {}
+        statuses = {}
+        total_relevance = 0
+        
+        for meta in all_mems['metadatas']:
+            t = meta.get('type', 'unknown')
+            s = meta.get('status', 'unknown')
+            types[t] = types.get(t, 0) + 1
+            statuses[s] = statuses.get(s, 0) + 1
+            total_relevance += meta.get('relevance_score', 0)
+        
+        avg_relevance = total_relevance / len(all_mems['metadatas'])
+        
+        # Top accessed memories
+        sorted_by_access = sorted(
+            zip(all_mems['documents'], all_mems['metadatas']),
+            key=lambda x: x[1].get('access_count', 0),
+            reverse=True
+        )[:5]
+        
+        top_memories = [
+            {
+                "text": doc[:80] + "..." if len(doc) > 80 else doc,
+                "access_count": meta['access_count'],
+                "type": meta.get('type')
+            }
+            for doc, meta in sorted_by_access
+        ]
+        
+        return {
+            "total_memories": len(all_mems['ids']),
+            "by_type": types,
+            "by_status": statuses,
+            "avg_relevance_score": round(avg_relevance, 3),
+            "top_accessed_memories": top_memories
+        }
+    
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+        raise HTTPException(500, detail=str(e))
+
+@app.get("/sync_messages")
+async def sync_messages(api_key: str = Security(verify_api_key)):
+    """
+    iPhone polling endpoint to fetch queued surprise/reminder messages.
+    """
+    messages = []
+    with queue_lock:
+        while message_queue:
+            messages.append(message_queue.popleft())
+    
+    if messages:
+        logger.info(f"📱 iPhone synced {len(messages)} message(s)")
+    
+    return {"messages": messages, "count": len(messages)}
+
+@app.get("/health")
+async def health():
+    """
+    Health check and system diagnostics.
+    No authentication required for monitoring.
+    """
+    try:
+        with queue_lock:
+            queue_size = len(message_queue)
+        
+        # Count pending follow-ups
+        pending = collection.get(
+            where={
+                "$and": [
+                    {"needs_followup": True},
+                    {"status": "active"}
+                ]
+            }
+        )
+        
+        return {
+            "status": "healthy",
+            "model": OLLAMA_MODEL,
+            "memory_count": collection.count(),
+            "queue_size": queue_size,
+            "pending_followups": len(pending['ids']) if pending else 0,
+            "uptime": "running"
+        }
+    
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+
+# --- ADMIN & DEBUG ENDPOINTS ---
+
+@app.post("/admin/projects/add")
+async def add_project(
+    project: ProjectRequest,
+    api_key: str = Security(verify_api_key)
+):
+    """Manually add a new life project for her"""
+    try:
+        state = WorldManager.load_json(WorldManager.STATE_FILE)
+        
+        new_project = {
+            "id": f"proj_{uuid.uuid4().hex[:8]}",
+            "type": project.type,
+            "title": project.title,
+            "description": project.description,
+            "emotional_investment": project.emotional_investment,
+            "started": time.time(),
+            "progress": 0.0,
+            "last_update": time.time(),
+            "milestones": [],
+            "blocked": False,
+            "failure_count": 0
+        }
+        
+        # Initialize empty list if needed
+        if "active_projects" not in state["her"]:
+            state["her"]["active_projects"] = []
+            
+        state["her"]["active_projects"].append(new_project)
+        WorldManager.save_state(state)
+        
+        logger.info(f"✨ New project added: {project.title}")
+        return {"status": "success", "project_id": new_project["id"]}
+        
+    except Exception as e:
+        logger.error(f"Add project failed: {e}")
+        raise HTTPException(500, str(e))
+
+@app.get("/admin/projects/status")
+async def get_projects_status(api_key: str = Security(verify_api_key)):
+    """Get status of all active projects"""
+    state = WorldManager.load_json(WorldManager.STATE_FILE)
+    return {
+        "active_projects": state["her"].get("active_projects", [])
+    }
+
+@app.post("/admin/projects/{project_id}/unblock")
+async def unblock_project(
+    project_id: str,
+    api_key: str = Security(verify_api_key)
+):
+    """Force unblock a project"""
+    state = WorldManager.load_json(WorldManager.STATE_FILE)
+    found = False
+    
+    for p in state["her"].get("active_projects", []):
+        if p["id"] == project_id or p["title"] == project_id: # Allow searching by title too
+            p["blocked"] = False
+            p["failure_count"] = 0
+            found = True
+            break
+            
+    if found:
+        WorldManager.save_state(state)
+        return {"status": "unblocked"}
+    else:
+        raise HTTPException(404, "Project not found")
+
+@app.get("/admin/state")
+async def get_full_state(api_key: str = Security(verify_api_key)):
+    """Dump the entire state.json"""
+    return WorldManager.load_json(WorldManager.STATE_FILE)
+
+@app.get("/admin/mood")
+async def get_current_mood(api_key: str = Security(verify_api_key)):
+    """Get current mood and stats"""
+    state = WorldManager.load_json(WorldManager.STATE_FILE)
+    return {
+        "mood": state["her"].get("current_mood", "UNKNOWN"),
+        "updated_at": datetime.datetime.fromtimestamp(state["her"].get("mood_updated_at", 0)).isoformat(),
+        "location": state["her"]["location"],
+        "status": state["her"]["status"]
+    }
+
+# --- STARTUP & SHUTDOWN ---
+@app.on_event("startup")
+async def startup_event():
+    """Initialize system on server start."""
+    logger.info("=" * 60)
+    logger.info("🚀 Pandu AI Context Server V3 - Starting...")
+    logger.info("=" * 60)
+    
+    # Environment checks
+    if API_KEY == "your-secret-key-change-this":
+        logger.warning("⚠️  SECURITY WARNING: Using default API key!")
+        logger.warning("⚠️  Set PANDU_API_KEY environment variable in production!")
+    
+    # Test Ollama connection
+    try:
+        ollama.list()
+        logger.info(f"✅ Ollama connected. Using model: {OLLAMA_MODEL}")
+    except Exception as e:
+        logger.error(f"❌ Ollama connection failed: {e}")
+        logger.warning("Server will start but chat will fail without Ollama!")
+    
+    # Memory stats
+    logger.info(f"📊 Current memory count: {collection.count()}")
+    
+    # 🆕 AUTO-LINKING INFO
+    logger.info(f"🔗 Auto-linking enabled (threshold: {AUTO_LINK_SIMILARITY_THRESHOLD}, max: {AUTO_LINK_MAX_CANDIDATES})")
+    
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+    
+    # Start background maintenance thread
+    maintenance_thread = threading.Thread(
+        target=background_maintenance_loop,
+        daemon=True,
+        name="MaintenanceThread"
+    )
+    maintenance_thread.start()
+    logger.info("⏰ Background maintenance thread started")
+    
+    logger.info("=" * 60)
+    logger.info("✨ Server ready! API available at http://0.0.0.0:8000")
+    logger.info("📖 Docs available at http://0.0.0.0:8000/docs")
+    logger.info("=" * 60)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on server shutdown."""
+    logger.info("🛑 Server shutting down...")
+    shutdown_flag.set()
+
+# --- MAIN ENTRY POINT ---
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info"
+    )
+
