@@ -288,7 +288,7 @@ struct ContentView: View {
             HealthView()
         }
         .fullScreenCover(isPresented: $showingAvatar) {
-            AvatarView(tts: tts)
+            AvatarView(tts: tts, stt: stt, voiceMode: $voiceMode)
         }
         .sheet(isPresented: $showingMemoryDashboard) {
             MemoryDashboardView()

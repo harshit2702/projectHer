@@ -126,43 +126,121 @@ extension AvatarScene {
     func triggerGesture(part: String, type: String, intensity: GestureIntensity = .moderate) {
         print("✨ Gesture: \(type) on \(part) [\(intensity.rawValue)]")
         
-        // Map to Semantic Context
-        if let touchPart = TouchPart(rawValue: part) {
-            let baseGesture = type.hasPrefix("Pull") ? "Pull" : type
-            if let gestureType = GestureType(rawValue: baseGesture) {
-                let interaction = PhysicalInteraction(part: touchPart, gesture: gestureType, intensity: intensity.rawValue)
-                print("📝 Semantic Context: \(interaction.emotionalMeaning)")
+        // Get the base gesture type for server (Pull Left/Right/Up/Down -> Pull)
+        let baseGesture = type.hasPrefix("Pull") ? "Pull" : type
+        
+        // Send to Server for context-aware reaction
+        Task {
+            do {
+                let response = try await NetworkManager.shared.recordInteraction(
+                    part: part,
+                    gesture: baseGesture,
+                    intensity: intensity.rawValue,
+                    isTalking: self.isTalking
+                )
                 
-                // Send to Server
-                Task {
-                    do {
-                        let response = try await NetworkManager.shared.recordInteraction(
-                            part: interaction.part.rawValue,
-                            gesture: interaction.gesture.rawValue,
-                            intensity: interaction.intensity,
-                            emotionalMeaning: interaction.emotionalMeaning
+                await MainActor.run {
+                    // 1. Play the server-determined reaction animation
+                    self.playReaction(reactionId: response.reaction_id, spawnHearts: response.spawn_hearts)
+                    
+                    // 2. Update hair state
+                    let assetName = (response.hair_state == "hair_neat") ? "hair" : response.hair_state
+                    self.hairBase?.texture = SKTexture(imageNamed: assetName)
+                    
+                    // 3. Show dialogue (silent mode = floating text, speak mode = TTS)
+                    if let dialogue = response.dialogue {
+                        self.showTouchDialogue(
+                            text: dialogue,
+                            mode: response.dialogue_mode,
+                            emotion: response.dialogue_emotion ?? "neutral"
                         )
-                        
-                        // Handle Server Feedback (e.g. Messy Hair)
-                        if let newHairState = response.hair_state {
-                            await MainActor.run {
-                                // Only update if it's a valid asset name (simple check or try/catch)
-                                // Assuming "hair_5", "hair_neat" map to assets or default
-                                let assetName = (newHairState == "hair_neat") ? "hair" : newHairState
-                                self.hairBase?.texture = SKTexture(imageNamed: assetName)
-                            }
-                        }
-                        
-                    } catch {
-                        print("Failed to record interaction: \(error)")
                     }
+                    
+                    // 4. Trigger haptic based on outcome
+                    switch response.outcome {
+                    case "positive":
+                        self.triggerHaptic(type: "success")
+                    case "negative":
+                        self.triggerHaptic(type: "warning")
+                    default:
+                        self.triggerHaptic(type: "light")
+                    }
+                    
+                    print("🎭 Reaction: \(response.reaction_id) [\(response.outcome)] | Bonding: \(response.bonding_score)")
+                }
+                
+            } catch {
+                print("❌ Failed to record interaction: \(error)")
+                // Fallback to local reaction if server fails
+                await MainActor.run {
+                    self.handleReactionFallback(part: part, type: type, intensity: intensity)
                 }
             }
         }
         
         onGestureDetected?(part, type)
+        // Note: Reaction is now handled by server response, not locally
+        // handleReaction is only used as fallback when server is unreachable
+    }
+    
+    // MARK: - Dialogue Display
+    
+    /// Shows touch dialogue as floating text or triggers TTS
+    func showTouchDialogue(text: String, mode: String, emotion: String) {
+        // Always show floating text so user sees it
+        showFloatingText(text)
         
-        // Map to reactions (implemented in GameScene+Emotions.swift)
+        if mode == "speak" {
+            // Trigger TTS via callback (connected to TTSManager in AvatarView)
+            // This will also trigger lip sync via onChange(of: tts.isSpeaking)
+            onSpeakDialogue?(text, emotion)
+        }
+    }
+    
+    /// Shows floating text above the avatar that fades out
+    func showFloatingText(_ text: String) {
+        // Remove any existing dialogue
+        childNode(withName: "touchDialogue")?.removeFromParent()
+        
+        let label = SKLabelNode(text: text)
+        label.name = "touchDialogue"
+        label.fontName = "AvenirNext-Medium"
+        label.fontSize = 18
+        label.fontColor = .white
+        label.position = CGPoint(x: 0, y: (body?.position.y ?? 0) + 180)
+        label.zPosition = 300
+        label.alpha = 0
+        
+        // Add background for readability
+        let background = SKShapeNode(rectOf: CGSize(width: label.frame.width + 20, height: label.frame.height + 10), cornerRadius: 8)
+        background.fillColor = UIColor.black.withAlphaComponent(0.6)
+        background.strokeColor = .clear
+        background.position = CGPoint(x: 0, y: -2)
+        background.zPosition = -1
+        label.addChild(background)
+        
+        addChild(label)
+        
+        // Animate: fade in, float up, fade out
+        let fadeIn = SKAction.fadeIn(withDuration: 0.2)
+        let floatUp = SKAction.moveBy(x: 0, y: 30, duration: 2.0)
+        let fadeOut = SKAction.fadeOut(withDuration: 0.5)
+        let remove = SKAction.removeFromParent()
+        
+        let sequence = SKAction.sequence([
+            fadeIn,
+            SKAction.group([floatUp, SKAction.sequence([SKAction.wait(forDuration: 1.5), fadeOut])]),
+            remove
+        ])
+        
+        label.run(sequence)
+    }
+    
+    // MARK: - Fallback Reaction (when server unreachable)
+    
+    /// Local fallback reactions when server is unavailable
+    func handleReactionFallback(part: String, type: String, intensity: GestureIntensity) {
+        triggerHaptic(type: "medium")
         handleReaction(part: part, type: type, intensity: intensity)
     }
     

@@ -4,6 +4,8 @@ import SpriteKit
 struct AvatarView: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var tts: TTSManager
+    @ObservedObject var stt: LiveSTT
+    @Binding var voiceMode: Bool
     
     // Scene (Held as a State object)
     @State private var scene: AvatarScene = {
@@ -15,13 +17,17 @@ struct AvatarView: View {
     }()
     
     // UI State
-    @State private var isMuted = false
     @State private var showCustomize = false
     
     // Customization State
     @ObservedObject var wardrobe = WardrobeManager.shared
     @AppStorage("avatarWeather") private var selectedWeather = "clear"
     @State private var windStrength: Double = 0.0
+    
+    // Voice Settings (for touch dialogue TTS)
+    @AppStorage("selectedVoiceId") private var selectedVoiceId: String = ""
+    @AppStorage("voicePitch") private var voicePitch: Double = 1.0
+    @AppStorage("voiceRate") private var voiceRate: Double = 0.5
     
     let weatherOptions: [(String, String)] = [
         ("Clear", "clear"),
@@ -55,6 +61,11 @@ struct AvatarView: View {
             syncLipSync()
             syncWardrobe()
             updateWeather(selectedWeather)
+            
+            // Connect touch dialogue TTS callback
+            scene.onSpeakDialogue = { [self] text, emotion in
+                tts.speak(text, voiceId: selectedVoiceId, pitchMultiplier: Float(voicePitch), rate: Float(voiceRate))
+            }
         }
         .onChange(of: wardrobe.currentOutfit.base.id) { _, _ in
             syncWardrobe()
@@ -80,7 +91,10 @@ struct AvatarView: View {
 
     var controlsOverlay: some View {
         VStack {
+            // Top Controls
             HStack {
+                Spacer()
+                
                 // Customize Button
                 Button(action: { showCustomize = true }) {
                     Image(systemName: "slider.horizontal.3")
@@ -89,42 +103,63 @@ struct AvatarView: View {
                         .clipShape(Circle())
                         .foregroundColor(.white)
                 }
-                
-                Spacer()
-                
-                // Mute/Unmute
-                Button(action: { isMuted.toggle() }) {
-                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .padding()
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .foregroundColor(.white)
-                }
-                
-                // Close
-                Button(action: { dismiss() }) {
-                    Image(systemName: "xmark")
-                        .padding()
-                        .background(Color.red.opacity(0.8))
-                        .clipShape(Circle())
-                        .foregroundColor(.white)
-                }
             }
             .padding()
             
             Spacer()
             
-            // Caption Area
-            if tts.isSpeaking {
-                Text("Speaking...")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.8))
+            // Status Indicators
+            VStack(spacing: 10) {
+                // Listening Indicator
+                if voiceMode {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text(stt.transcript.isEmpty ? "Listening..." : stt.transcript)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                    }
                     .padding(8)
-                    .background(.black.opacity(0.5))
+                    .background(Color.black.opacity(0.6))
                     .clipShape(Capsule())
-                    .padding(.bottom, 50)
-                    .transition(.opacity)
+                }
+                
+                // Speaking Indicator
+                if tts.isSpeaking {
+                    Text("Speaking...")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(8)
+                        .background(.black.opacity(0.5))
+                        .clipShape(Capsule())
+                }
             }
+            .padding(.bottom, 20)
+            
+            // Bottom Controls (Call Style)
+            HStack(spacing: 40) {
+                // Mic Toggle
+                Button(action: toggleMic) {
+                    Image(systemName: voiceMode ? "mic.fill" : "mic.slash.fill")
+                        .font(.title2)
+                        .frame(width: 60, height: 60)
+                        .background(voiceMode ? Color.white : Color.gray.opacity(0.5))
+                        .foregroundColor(voiceMode ? .black : .white)
+                        .clipShape(Circle())
+                }
+                
+                // End Call
+                Button(action: { dismiss() }) {
+                    Image(systemName: "phone.down.fill")
+                        .font(.title2)
+                        .frame(width: 60, height: 60)
+                        .background(Color.red)
+                        .foregroundColor(.white)
+                        .clipShape(Circle())
+                }
+            }
+            .padding(.bottom, 40)
         }
     }
 
@@ -231,6 +266,21 @@ struct AvatarView: View {
             scene.lighting?.update(timeOfDay: 22)
         default: // clear
             break
+        }
+    }
+    
+    func toggleMic() {
+        if voiceMode {
+            // Stop
+            stt.stop()
+            voiceMode = false
+        } else {
+            // Start
+            voiceMode = true
+            Task {
+                try? await stt.requestPermissions()
+                try? stt.start()
+            }
         }
     }
 }

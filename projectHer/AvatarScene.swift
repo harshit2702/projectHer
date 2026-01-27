@@ -32,6 +32,10 @@ class AvatarScene: SKScene, ObservableObject {
     // --- Interaction ---
     var onGestureDetected: ((String, String) -> Void)?
     
+    /// Callback to trigger TTS from touch dialogues
+    /// Parameters: (text, emotion) - AvatarView connects this to TTSManager
+    var onSpeakDialogue: ((String, String) -> Void)?
+    
     // --- Touch State (Internal for Extensions) ---
     var activeTouch: UITouch?
     var touchStartLocation: CGPoint = .zero

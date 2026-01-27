@@ -518,4 +518,584 @@ extension AvatarScene {
         ])
         eyes.run(SKAction.repeatForever(seq), withKey: "preset")
     }
+    
+    // MARK: - Context-Aware Touch Reactions
+    // These reactions are triggered based on server-evaluated context
+    // Each reaction_id from the server maps to one of these functions
+    
+    /// Dispatcher for server-provided reaction IDs
+    func playReaction(reactionId: String, spawnHearts: Bool = false) {
+        switch reactionId {
+        // Positive reactions
+        case "react_laugh":
+            reactLaugh()
+        case "react_nuzzle_happy":
+            reactNuzzleHappy()
+        case "react_finger_kiss":
+            reactFingerKiss(at: touchStartLocation)
+        case "react_shy_pleased":
+            reactShyPleased()
+        case "react_ticklish":
+            reactTicklish()
+        case "react_ear_blush":
+            reactEarBlush()
+        case "react_pat_happy":
+            reactPatHappy()
+        case "react_surprised_happy":
+            reactSurprisedHappy()
+        case "react_ouch_playful":
+            reactOuchPlayful()
+        case "react_cross_eyed_silly":
+            reactCrossEyedSilly()
+        case "react_hair_surprise_playful":
+            reactHairSurprisePlayful()
+            
+        // Neutral reactions
+        case "react_blink":
+            reactBlink()
+        case "react_nuzzle_tired":
+            reactNuzzleTired()
+        case "react_shy_smile":
+            reactShySmile()
+        case "react_shy_tolerant":
+            reactShyTolerant()
+        case "react_ear_twitch":
+            reactEarTwitch()
+        case "react_ear_curious":
+            reactEarCurious()
+        case "react_pat_tolerant":
+            reactPatTolerant()
+        case "react_surprised_neutral":
+            reactSurprisedNeutral()
+        case "react_ouch_mild":
+            reactOuchMild()
+        case "react_disgust_light":
+            reactDisgustLight()
+        case "react_tolerate":
+            reactTolerate()
+        case "react_hair_ouch":
+            reactHairOuch()
+        case "react_confused":
+            reactConfused()
+            
+        // Negative reactions
+        case "react_annoyed_light":
+            reactAnnoyedLight()
+        case "react_pull_away":
+            reactPullAway()
+        case "react_ouch_angry":
+            reactOuchAngry()
+        case "react_mouth_cover":
+            reactMouthCover()
+        case "react_recoil":
+            reactRecoil()
+        case "react_annoyed_ear":
+            reactAnnoyedEar()
+        case "react_annoyed_swat":
+            reactAnnoyedSwat()
+        case "react_startled":
+            reactStartled()
+        case "react_disgust_recoil":
+            reactDisgustRecoil()
+        case "react_hair_hurt":
+            reactHairHurt()
+        case "react_annoyed_spam":
+            reactAnnoyedSpam()
+            
+        default:
+            reactBlink() // Fallback
+        }
+        
+        // Spawn hearts if requested
+        if spawnHearts {
+            self.spawnHearts(at: touchStartLocation)
+        }
+    }
+    
+    // MARK: - Positive Reactions
+    
+    /// Happy nuzzle - content closed eyes, slight lean
+    func reactNuzzleHappy() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "eye_close")
+        updateMouth(name: "mouth_open")
+        
+        let lean = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.05, duration: 0.4),
+            SKAction.wait(forDuration: 0.6),
+            SKAction.rotate(byAngle: -0.05, duration: 0.3)
+        ])
+        body.run(lean)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Shy but pleased - dreamy half-closed eyes, gentle lean
+    func reactShyPleased() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_open")
+        
+        let lean = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.04, duration: 0.4),
+            SKAction.wait(forDuration: 0.8),
+            SKAction.rotate(byAngle: -0.04, duration: 0.3)
+        ])
+        body.run(lean)
+        
+        scheduleReset(after: 1.8)
+    }
+    
+    /// Ear blush - shoulder shrug, closed eyes
+    func reactEarBlush() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_close")
+        updateMouth(name: "mouth_open")
+        
+        let shrug = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: 8, duration: 0.2),
+            SKAction.wait(forDuration: 0.6),
+            SKAction.moveBy(x: 0, y: -8, duration: 0.3)
+        ])
+        body.run(shrug)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Happy head pat - pleased expression
+    func reactPatHappy() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "eye_close")
+        updateMouth(name: "mouth_open")
+        
+        let bounce = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: -3, duration: 0.15),
+            SKAction.moveBy(x: 0, y: 3, duration: 0.15)
+        ])
+        body.run(SKAction.repeat(bounce, count: 2))
+        
+        scheduleReset(after: 1.2)
+    }
+    
+    /// Surprised but happy
+    func reactSurprisedHappy() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_open")
+        updateMouth(name: "mouth_ah")
+        
+        let jump = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: 10, duration: 0.1),
+            SKAction.moveBy(x: 0, y: -10, duration: 0.2)
+        ])
+        body.run(jump)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// Playful ouch - fake pain, teasing
+    func reactOuchPlayful() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_close")
+        updateMouth(name: "mouth_ah")
+        
+        let wiggle = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.03, duration: 0.08),
+            SKAction.rotate(byAngle: -0.06, duration: 0.16),
+            SKAction.rotate(byAngle: 0.03, duration: 0.08)
+        ])
+        body.run(wiggle)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// Cross-eyed silly - playful nose press
+    func reactCrossEyedSilly() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "both_eye_towards_nose")
+        updateMouth(name: "mouth_open")
+        
+        let shake = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.02, duration: 0.1),
+            SKAction.rotate(byAngle: -0.04, duration: 0.2),
+            SKAction.rotate(byAngle: 0.02, duration: 0.1)
+        ])
+        body.run(SKAction.repeat(shake, count: 2))
+        
+        scheduleReset(after: 1.2)
+    }
+    
+    /// Hair pulled but playful
+    func reactHairSurprisePlayful() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_open")
+        updateMouth(name: "mouth_ah")
+        
+        let shake = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.04, duration: 0.1),
+            SKAction.rotate(byAngle: -0.08, duration: 0.2),
+            SKAction.rotate(byAngle: 0.04, duration: 0.1)
+        ])
+        body.run(shake)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    // MARK: - Neutral Reactions
+    
+    /// Simple blink - acknowledgement
+    func reactBlink() {
+        let currentEyes = eyes.texture
+        eyes.texture = SKTexture(imageNamed: "eye_close")
+        
+        let wait = SKAction.wait(forDuration: 0.2)
+        let reset = SKAction.run { [weak self] in
+            self?.eyes.texture = currentEyes ?? SKTexture(imageNamed: "eye_open")
+        }
+        self.run(SKAction.sequence([wait, reset]))
+    }
+    
+    /// Tired nuzzle - accepting but low energy
+    func reactNuzzleTired() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        let sigh = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: -3, duration: 0.4),
+            SKAction.wait(forDuration: 0.6),
+            SKAction.moveBy(x: 0, y: 3, duration: 0.4)
+        ])
+        body.run(sigh)
+        
+        scheduleReset(after: 1.8)
+    }
+    
+    /// Shy small smile
+    func reactShySmile() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "both_eye_left")
+        updateMouth(name: "mouth_neutral")
+        
+        scheduleReset(after: 1.2)
+    }
+    
+    /// Shy but tolerant
+    func reactShyTolerant() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        let slight = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.02, duration: 0.3),
+            SKAction.wait(forDuration: 0.5),
+            SKAction.rotate(byAngle: -0.02, duration: 0.3)
+        ])
+        body.run(slight)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Ear twitch - curious
+    func reactEarTwitch() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_open")
+        updateMouth(name: "mouth_neutral")
+        
+        // Quick head tilt
+        let tilt = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.03, duration: 0.15),
+            SKAction.rotate(byAngle: -0.03, duration: 0.15)
+        ])
+        body.run(tilt)
+        
+        scheduleReset(after: 0.8)
+    }
+    
+    /// Ear curious - confused look
+    func reactEarCurious() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "both_eye_up")
+        updateMouth(name: "mouth_neutral")
+        
+        scheduleReset(after: 1.2)
+    }
+    
+    /// Tolerant head pat
+    func reactPatTolerant() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        let sink = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: -2, duration: 0.2),
+            SKAction.moveBy(x: 0, y: 2, duration: 0.2)
+        ])
+        body.run(sink)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// Surprised neutral
+    func reactSurprisedNeutral() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_open")
+        updateMouth(name: "mouth_neutral")
+        
+        scheduleReset(after: 0.8)
+    }
+    
+    /// Mild ouch
+    func reactOuchMild() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        scheduleReset(after: 0.8)
+    }
+    
+    /// Light disgust
+    func reactDisgustLight() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        let lean = SKAction.sequence([
+            SKAction.scale(to: 0.34, duration: 0.2),
+            SKAction.wait(forDuration: 0.3),
+            SKAction.scale(to: 0.35, duration: 0.2)
+        ])
+        body.run(lean)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// General tolerate
+    func reactTolerate() {
+        brows.texture = SKTexture(imageNamed: "brow_neutral")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        let sigh = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: -3, duration: 0.3),
+            SKAction.wait(forDuration: 0.5),
+            SKAction.moveBy(x: 0, y: 3, duration: 0.3)
+        ])
+        body.run(sigh)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Hair ouch - mild
+    func reactHairOuch() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_open")
+        
+        scheduleReset(after: 0.8)
+    }
+    
+    /// Confused reaction
+    func reactConfused() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "both_eye_up")
+        updateMouth(name: "mouth_neutral")
+        
+        let tilt = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.04, duration: 0.3),
+            SKAction.wait(forDuration: 0.5),
+            SKAction.rotate(byAngle: -0.04, duration: 0.3)
+        ])
+        body.run(tilt)
+        
+        scheduleReset(after: 1.2)
+    }
+    
+    // MARK: - Negative Reactions
+    
+    /// Light annoyance
+    func reactAnnoyedLight() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        scheduleReset(after: 1.2)
+    }
+    
+    /// Pull away - uncomfortable
+    func reactPullAway() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "both_eye_right")
+        updateMouth(name: "mouth_neutral")
+        
+        let pullAway = SKAction.sequence([
+            SKAction.moveBy(x: 20, y: 0, duration: 0.2),
+            SKAction.wait(forDuration: 0.8),
+            SKAction.moveBy(x: -20, y: 0, duration: 0.4)
+        ])
+        body.run(pullAway)
+        
+        scheduleReset(after: 1.8)
+    }
+    
+    /// Angry ouch - real pain
+    func reactOuchAngry() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "both_eye_teary")
+        updateMouth(name: "mouth_ah")
+        
+        let shake = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.05, duration: 0.05),
+            SKAction.rotate(byAngle: -0.1, duration: 0.1),
+            SKAction.rotate(byAngle: 0.05, duration: 0.05)
+        ])
+        body.run(shake)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Mouth cover - embarrassed in public
+    func reactMouthCover() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "both_eye_left")
+        updateMouth(name: "mouth_neutral")
+        
+        let flinch = SKAction.sequence([
+            SKAction.moveBy(x: -10, y: 0, duration: 0.15),
+            SKAction.wait(forDuration: 0.6),
+            SKAction.moveBy(x: 10, y: 0, duration: 0.3)
+        ])
+        body.run(flinch)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Recoil - uncomfortable touch
+    func reactRecoil() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "both_eye_left")
+        updateMouth(name: "mouth_neutral")
+        
+        let recoil = SKAction.sequence([
+            SKAction.moveBy(x: -15, y: 0, duration: 0.15),
+            SKAction.scale(to: 0.33, duration: 0.2),
+            SKAction.wait(forDuration: 0.5),
+            SKAction.group([
+                SKAction.moveBy(x: 15, y: 0, duration: 0.3),
+                SKAction.scale(to: 0.35, duration: 0.3)
+            ])
+        ])
+        body.run(recoil)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Annoyed ear touch
+    func reactAnnoyedEar() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "left_eye_blink")
+        updateMouth(name: "mouth_neutral")
+        
+        let twitch = SKAction.sequence([
+            SKAction.rotate(byAngle: -0.03, duration: 0.1),
+            SKAction.rotate(byAngle: 0.03, duration: 0.1)
+        ])
+        body.run(twitch)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// Swat away - repeated unwanted touch
+    func reactAnnoyedSwat() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "left_eye_blink")
+        updateMouth(name: "mouth_ah")
+        
+        let swat = SKAction.sequence([
+            SKAction.rotate(byAngle: -0.08, duration: 0.1),
+            SKAction.rotate(byAngle: 0.08, duration: 0.1)
+        ])
+        body.run(swat)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// Startled - scared
+    func reactStartled() {
+        brows.texture = SKTexture(imageNamed: "brow_up")
+        eyes.texture = SKTexture(imageNamed: "eye_open")
+        updateMouth(name: "mouth_ah")
+        
+        let jump = SKAction.sequence([
+            SKAction.moveBy(x: 0, y: 15, duration: 0.08),
+            SKAction.moveBy(x: 0, y: -15, duration: 0.15)
+        ])
+        body.run(jump)
+        
+        scheduleReset(after: 1.0)
+    }
+    
+    /// Disgust with recoil
+    func reactDisgustRecoil() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        let recoil = SKAction.sequence([
+            SKAction.scale(to: 0.32, duration: 0.3),
+            SKAction.wait(forDuration: 0.5),
+            SKAction.scale(to: 0.35, duration: 0.4)
+        ])
+        body.run(recoil)
+        
+        scheduleReset(after: 1.5)
+    }
+    
+    /// Hair pulled hard - hurt
+    func reactHairHurt() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "both_eye_tear_flowing")
+        updateMouth(name: "mouth_ah")
+        
+        let shake = SKAction.sequence([
+            SKAction.rotate(byAngle: 0.05, duration: 0.08),
+            SKAction.rotate(byAngle: -0.1, duration: 0.16),
+            SKAction.rotate(byAngle: 0.05, duration: 0.08)
+        ])
+        body.run(shake)
+        
+        scheduleReset(after: 2.0)
+    }
+    
+    /// Annoyed by spam touches
+    func reactAnnoyedSpam() {
+        brows.texture = SKTexture(imageNamed: "brow_in")
+        eyes.texture = SKTexture(imageNamed: "eye_half")
+        updateMouth(name: "mouth_neutral")
+        
+        // Exasperated sigh + look away
+        let exasperated = SKAction.sequence([
+            SKAction.run { [weak self] in
+                self?.eyes.texture = SKTexture(imageNamed: "both_eye_right")
+            },
+            SKAction.moveBy(x: 0, y: -5, duration: 0.3),
+            SKAction.wait(forDuration: 1.0),
+            SKAction.moveBy(x: 0, y: 5, duration: 0.3)
+        ])
+        body.run(exasperated)
+        
+        scheduleReset(after: 2.0)
+    }
+    
+    // MARK: - Helper
+    
+    /// Schedule reset to neutral expression
+    private func scheduleReset(after duration: TimeInterval) {
+        let wait = SKAction.wait(forDuration: duration)
+        let reset = SKAction.run { [weak self] in
+            self?.eyes.texture = SKTexture(imageNamed: "eye_open")
+            self?.brows.texture = SKTexture(imageNamed: "brow_neutral")
+            self?.updateMouth(name: "mouth_neutral")
+        }
+        self.run(SKAction.sequence([wait, reset]), withKey: "resetExpression")
+    }
 }

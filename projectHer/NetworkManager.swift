@@ -7,10 +7,29 @@ struct OutfitSyncResponse: Decodable {
     let reason: String?
 }
 
-struct InteractionResponse: Decodable {
+// Legacy response (kept for backwards compatibility)
+struct InteractionResponseLegacy: Decodable {
     let status: String
     let bonding_score: Double
     let hair_state: String?
+}
+
+/// New context-aware touch response from server
+struct TouchReactionResponse: Decodable {
+    let status: String
+    let outcome: String                    // "positive", "neutral", "negative"
+    let reaction_id: String                // Animation to play
+    let bonding_delta: Double              // Change in bonding
+    let bonding_score: Double              // Updated total
+    let dialogue: String?                  // Text to show/speak
+    let dialogue_mode: String              // "silent" or "speak"
+    let dialogue_emotion: String?          // For TTS tone
+    let spawn_hearts: Bool
+    let hair_state: String
+    let memory_note: String?
+    
+    /// Convenience for backwards compatibility
+    var hair_state_optional: String? { hair_state }
 }
 
 struct WindResponse: Decodable {
@@ -44,18 +63,18 @@ class NetworkManager {
         return try await sendPostRequest(to: endpoint, body: payload, responseType: OutfitSyncResponse.self)
     }
     
-    // MARK: - Interaction Sync
-    func recordInteraction(part: String, gesture: String, intensity: Int, emotionalMeaning: String) async throws -> InteractionResponse {
+    // MARK: - Interaction Sync (New Context-Aware)
+    func recordInteraction(part: String, gesture: String, intensity: Int, isTalking: Bool = false) async throws -> TouchReactionResponse {
         let endpoint = "\(baseURL)/state/interaction"
         let payload: [String: Any] = [
             "part": part,
             "gesture": gesture,
             "intensity": intensity,
-            "emotional_meaning": emotionalMeaning,
+            "is_talking": isTalking,
             "timestamp": Date().timeIntervalSince1970
         ]
         
-        return try await sendPostRequest(to: endpoint, body: payload, responseType: InteractionResponse.self)
+        return try await sendPostRequest(to: endpoint, body: payload, responseType: TouchReactionResponse.self)
     }
     
     // MARK: - Call Sync
