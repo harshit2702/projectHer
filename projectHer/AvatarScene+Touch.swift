@@ -132,6 +132,31 @@ extension AvatarScene {
             if let gestureType = GestureType(rawValue: baseGesture) {
                 let interaction = PhysicalInteraction(part: touchPart, gesture: gestureType, intensity: intensity.rawValue)
                 print("📝 Semantic Context: \(interaction.emotionalMeaning)")
+                
+                // Send to Server
+                Task {
+                    do {
+                        let response = try await NetworkManager.shared.recordInteraction(
+                            part: interaction.part.rawValue,
+                            gesture: interaction.gesture.rawValue,
+                            intensity: interaction.intensity,
+                            emotionalMeaning: interaction.emotionalMeaning
+                        )
+                        
+                        // Handle Server Feedback (e.g. Messy Hair)
+                        if let newHairState = response.hair_state {
+                            await MainActor.run {
+                                // Only update if it's a valid asset name (simple check or try/catch)
+                                // Assuming "hair_5", "hair_neat" map to assets or default
+                                let assetName = (newHairState == "hair_neat") ? "hair" : newHairState
+                                self.hairBase?.texture = SKTexture(imageNamed: assetName)
+                            }
+                        }
+                        
+                    } catch {
+                        print("Failed to record interaction: \(error)")
+                    }
+                }
             }
         }
         

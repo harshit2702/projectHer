@@ -146,6 +146,8 @@ class WardrobeManager: ObservableObject {
     // MARK: - Outfit Selection
     
     func changeOutfit(to item: ClothingItem) {
+        let oldOutfit = currentOutfit
+        
         if item.category == .accessories {
             // Toggle accessory
             if currentOutfit.accessories.contains(where: { $0.id == item.id }) {
@@ -161,7 +163,49 @@ class WardrobeManager: ObservableObject {
             // Change base outfit
             currentOutfit.base = item
         }
+        
         saveOutfit()
+        
+        // Sync with Server
+        Task {
+            do {
+                // We send the ID of the item that triggered the change (or the base ID if generic)
+                // The server logic uses 'model_id' to check permission.
+                // If we just added an accessory, we might want to validate that accessory?
+                // The user scenario was about "Red Bikini" (base).
+                // Let's send the ID of the item being changed/added.
+                
+                // If it's an accessory removal, maybe we don't need validation?
+                // But let's follow the 'outfit update' pattern.
+                // We will send the `base` outfit ID primarily, or the specific item ID?
+                // The server expects "model_id". If I send "hat_1", it checks if "hat_1" is allowed.
+                // If I change base to "bikini", I send "bikini".
+                
+                let response = try await NetworkManager.shared.syncOutfit(
+                    modelId: item.id,
+                    description: currentOutfit.description,
+                    style: item.style.rawValue,
+                    reason: "user_selection"
+                )
+                
+                if response.status == "rejected" {
+                    print("🚫 Outfit change rejected: \(response.reason ?? "Unknown")")
+                    // Revert
+                    await MainActor.run {
+                        self.currentOutfit = oldOutfit
+                        self.saveOutfit()
+                        // Optionally trigger a notification/alert here
+                    }
+                } else {
+                    print("✅ Outfit change approved")
+                }
+            } catch {
+                print("⚠️ Outfit sync failed: \(error)")
+                // Keep local change on network error? Or revert? 
+                // Usually keep local if offline, but if strict rules... 
+                // Let's keep local for now to avoid annoyance when offline.
+            }
+        }
     }
     
     // MARK: - Persistence

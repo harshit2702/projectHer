@@ -8,7 +8,7 @@ struct AvatarView: View {
     // Scene (Held as a State object)
     @State private var scene: AvatarScene = {
         let s = AvatarScene()
-        s.size = CGSize(width: 535, height: 940) // Logical size
+        s.size = CGSize(width: 450, height: 900) // Logical size
         s.scaleMode = .aspectFill
         s.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         return s
