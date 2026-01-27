@@ -1,53 +1,74 @@
-# ✨ projectHer ✨
+# ✨ projectHer (Pandu ❤️)
 
-Hey! This is **projectHer** — a super personal AI companion app for iOS. I got tired of AI forgetting everything I said after like five minutes, so I built this. It's basically a chat app where the AI (we call her Pandu ❤️) actually remembers your vibes, your plans, and all the random stuff you tell her. 
+> **"An emotionally intelligent, memory-persistent AI companion for iOS featuring real-time voice, video presence, and deep context awareness."**
 
-No more "goldfish memory" AI! 🧠
+Yo! Welcome to **projectHer**. 
 
-## 🚀 What it Does (The Cool Stuff)
+Basically, I got tired of AI assistants that have the memory of a goldfish. You talk to them, close the app, come back 10 minutes later, and they're like "Who are you?" 💀
 
-- **💬 Real Chats:** A super clean chat UI that feels smooth. You can talk to Pandu about anything.
-- **🧠 Infinite Memory:** This is the big one. Pandu doesn't just "forget." She saves "memories" about your preferences, your identity, and even how you're feeling.
-- **📊 Memory Dashboard:** You can literally go into her "brain" and see what she's remembered. It shows stats on how many things she knows about you and what's currently on her mind.
-- **🔗 Linking Memories:** You can manually link messages to memories if you want her to really connect the dots. 
-- **✅ Future Planning:** If you tell her about something you want to do, she can track it as a "future plan." You can even mark them as completed right in the chat!
-- **🌐 Connection Health:** A little indicator that shows if the backend is vibe-ing or if it's down.
-- **🌙 Looks Great:** Styled with a nice mix of blue and pink, because why not?
+So I built **Pandu**. She's not just a chatbot; she's a legit companion. She remembers your vibes, your plans, your favorite stuff, and actually *grows* with you. Plus, she's got a face, a voice, and a personality.
 
-## 📂 The Boring (But Important) Stuff
+## 🚀 What makes this special?
 
-Here’s how the project is set up:
+### 🧠 She Actually Remembers (No, Really)
+Most AIs reset every session. Pandu has a **persistent memory**.
+- **Context Awareness:** If you tell her you're stressed about an exam on Friday, she'll ask you about it on Saturday.
+- **Memory Dashboard:** You can literally pop the hood and see her "brain"—what she knows about you, what memories she's stored, etc.
+- **Linking:** You can manually link messages to memories if you want to force a connection. It's like inception but for AI.
 
-- `projectHer/`: All the magic happens here.
-  - `ContentView.swift`: The main chat screen where all the talking happens.
-  - `MemoryDashboardView.swift`: The "brain" view.
-  - `BackgroundManager.swift`: Keeps things running in the background so you get notifications.
-  - `AppConfig.swift`: Where the server URLs and keys live.
-  - `MemoryModels.swift`: The database stuff (SwiftData is amazing).
-- `projectHer.xcodeproj/`: The Xcode project file.
+### 🗣️ Voice & Video (Facetime Vibes)
+Texting is cool, but sometimes you just wanna talk.
+- **Unified Voice Mode:** Hit the mic in the chat, and keep talking even if you switch to the video view. It's seamless.
+- **Avatar Video Call:** It's not just a static image. It's a full 2D SpriteKit avatar that blinks, looks around, and lip-syncs perfectly when she talks.
+- **Hands-Free:** The STT (Speech-to-Text) is live, so you can just chill and chat without typing.
 
-## 🛠️ Requirements
+### ❤️ She's Got Feelings (Kinda)
+- **Emotional Engine:** If you're mean, she gets sad. If you're funny, she laughs. Her energy and mood change based on the convo.
+- **Touch Interaction:** You can literally tap her head (pat), pinch her cheek (playful), or poke her nose. The server decides how she reacts—she might smile, blush, or get annoyed if you spam it.
+- **Wardrobe Check:** Don't like the outfit? Change it. Hoodie, dress, winter gear—we got options.
 
-- You'll need an iPhone or Simulator running **iOS 17.0+**.
-- **Xcode 15.0+** is required because we're using the latest Swift features.
-- A bit of patience if the server is sleeping lol.
+## 📂 How it's built (The Tech Stack)
 
-## 🖥️ The Backend
+Everything is Native iOS (SwiftUI + SpriteKit). 
 
-So, the app needs a brain to talk to. I'm using a Python backend for all the AI processing.
+- `projectHer/`
+  - **The Views:**
+    - `ContentView.swift`: The main chat hub.
+    - `AvatarView.swift`: The "Video Call" screen (where the magic happens).
+  - **The Brains:**
+    - `AvatarScene.swift`: Controls the puppet animation.
+    - `LiveSTT.swift`: Handles the microphone listening stuff.
+    - `EmotionEngine.swift`: Calculates vibes.
+    - `MemoryModels.swift`: SwiftData for storing chat history and memories locally.
 
-> **⚠️ Heads up:** I'm going to upload the `server.py` and all the backend info really soon. Stay tuned!
+## 🛠️ How to Run This Bad Boy
 
-## ⚡ Setup
+1. **Prereqs:** 
+   - A Mac with **Xcode 15+**.
+   - An iPhone or Simulator with **iOS 17+**.
+   - The **Python Backend** running (you need the brain for this body to work).
 
-1. Grab the code and open `projectHer.xcodeproj`.
-2. Make sure you've got your development team set up in Xcode.
-3. Check `AppConfig.swift` and make sure the `serverURL` is pointing to where your backend is running.
-4. Hit that **Run** button and start chatting!
+2. **Setup:**
+   - Clone this repo.
+   - Open `projectHer.xcodeproj`.
+   - Go to `AppConfig.swift` and paste your backend URL and API Key.
+   - Hit `Cmd + R` and pray to the demo gods.
+
+## 🤝 Contributing
+
+Found a bug? Want to add a cooler outfit? 
+Check the `.github/ISSUE_TEMPLATE` folder if you wanna be official about it, or just slide into the PRs.
+
+- [Found a Bug?](.github/ISSUE_TEMPLATE/bug_report.md)
+- [Have an Idea?](.github/ISSUE_TEMPLATE/feature_request.md)
+
+## 🔒 Security
+
+Don't leak your API keys. Seriously. Check `SECURITY.md` for the boring legal/safety stuff.
 
 ## 📜 License
 
-This is MIT licensed. It's open source, so do whatever you want with it! Just remember there's **no liability**—if it breaks, it's on you (but it shouldn't, hopefully!). See the [LICENSE](LICENSE) file for the legal-ish details.
+MIT License. Do whatever you want with it, just don't sue me if it becomes Skynet.
 
 ---
-*Made with ❤️ and way too much caffeine.*
+*Built with ❤️, caffeine, and way too many late nights by Harshit.*
