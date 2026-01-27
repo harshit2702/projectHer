@@ -8,25 +8,24 @@ assignees: ''
 ---
 
 **Describe the bug**
-A clear and concise description of what the bug is.
+What went wrong? Give us the details.
 
 **To Reproduce**
 Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '...'
-3. Scroll down to '...'
-4. See error
+1. 
+2. 
+3. 
 
 **Expected behavior**
-A clear and concise description of what you expected to happen.
+What did you think was gonna happen?
 
 **Screenshots**
-If applicable, add screenshots to help explain your problem.
+Drop a screenshot or screen recording if you can (it helps a ton).
 
-**Environment (please complete the following information):**
+**Environment:**
  - Device: [e.g. iPhone 15 Pro]
  - OS: [e.g. iOS 17.2]
- - Version [e.g. 1.0.0]
+ - Connection: [e.g. WiFi / 5G]
 
-**Additional context**
-Add any other context about the problem here.
+**Backend Logs (Optional)**
+If you have access to the server logs, paste any errors here.
