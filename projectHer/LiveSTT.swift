@@ -81,9 +81,10 @@ final class LiveSTT: ObservableObject {
     
     private func bumpSilenceTimer() {
         silenceTimer?.invalidate()
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceSeconds, repeats: false) { [weak self] _ in
+        let weakSelf = self
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceSeconds, repeats: false) { _ in
             Task { @MainActor in
-                self?.finishAndSend()
+                weakSelf.finishAndSend()
             }
         }
     }

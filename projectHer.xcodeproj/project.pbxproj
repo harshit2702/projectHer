@@ -6,8 +6,41 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B1DFA6402F294EA20066C325 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B1DFA63F2F294EA20066C325 /* WidgetKit.framework */; };
+		B1DFA6422F294EA20066C325 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B1DFA6412F294EA20066C325 /* SwiftUI.framework */; };
+		B1DFA6532F294EA50066C325 /* PanduWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B1DFA63D2F294EA20066C325 /* PanduWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B1DFA6512F294EA50066C325 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B17DCF8E2EE94EC800B2EAC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B1DFA63C2F294EA20066C325;
+			remoteInfo = PanduWidgetsExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B1DFA6582F294EA50066C325 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B1DFA6532F294EA50066C325 /* PanduWidgetsExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		B17DCF962EE94EC800B2EAC0 /* projectHer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = projectHer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1DFA63D2F294EA20066C325 /* PanduWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PanduWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1DFA63F2F294EA20066C325 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		B1DFA6412F294EA20066C325 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -17,6 +50,13 @@
 				Info.plist,
 			);
 			target = B17DCF952EE94EC800B2EAC0 /* projectHer */;
+		};
+		B1DFA6572F294EA50066C325 /* Exceptions for "PanduWidgets" folder in "PanduWidgetsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B1DFA63C2F294EA20066C325 /* PanduWidgetsExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -29,6 +69,14 @@
 			path = projectHer;
 			sourceTree = "<group>";
 		};
+		B1DFA6432F294EA20066C325 /* PanduWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B1DFA6572F294EA50066C325 /* Exceptions for "PanduWidgets" folder in "PanduWidgetsExtension" target */,
+			);
+			path = PanduWidgets;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -39,6 +87,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B1DFA63A2F294EA20066C325 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B1DFA6422F294EA20066C325 /* SwiftUI.framework in Frameworks */,
+				B1DFA6402F294EA20066C325 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -46,6 +103,8 @@
 			isa = PBXGroup;
 			children = (
 				B17DCF982EE94EC800B2EAC0 /* projectHer */,
+				B1DFA6432F294EA20066C325 /* PanduWidgets */,
+				B1DFA63E2F294EA20066C325 /* Frameworks */,
 				B17DCF972EE94EC800B2EAC0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,8 +113,18 @@
 			isa = PBXGroup;
 			children = (
 				B17DCF962EE94EC800B2EAC0 /* projectHer.app */,
+				B1DFA63D2F294EA20066C325 /* PanduWidgetsExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B1DFA63E2F294EA20066C325 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B1DFA63F2F294EA20066C325 /* WidgetKit.framework */,
+				B1DFA6412F294EA20066C325 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -68,10 +137,12 @@
 				B17DCF922EE94EC800B2EAC0 /* Sources */,
 				B17DCF932EE94EC800B2EAC0 /* Frameworks */,
 				B17DCF942EE94EC800B2EAC0 /* Resources */,
+				B1DFA6582F294EA50066C325 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B1DFA6522F294EA50066C325 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				B17DCF982EE94EC800B2EAC0 /* projectHer */,
@@ -83,6 +154,28 @@
 			productReference = B17DCF962EE94EC800B2EAC0 /* projectHer.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B1DFA63C2F294EA20066C325 /* PanduWidgetsExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B1DFA6542F294EA50066C325 /* Build configuration list for PBXNativeTarget "PanduWidgetsExtension" */;
+			buildPhases = (
+				B1DFA6392F294EA20066C325 /* Sources */,
+				B1DFA63A2F294EA20066C325 /* Frameworks */,
+				B1DFA63B2F294EA20066C325 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B1DFA6432F294EA20066C325 /* PanduWidgets */,
+			);
+			name = PanduWidgetsExtension;
+			packageProductDependencies = (
+			);
+			productName = PanduWidgetsExtension;
+			productReference = B1DFA63D2F294EA20066C325 /* PanduWidgetsExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -90,11 +183,14 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2610;
+				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					B17DCF952EE94EC800B2EAC0 = {
 						CreatedOnToolsVersion = 26.1.1;
+					};
+					B1DFA63C2F294EA20066C325 = {
+						CreatedOnToolsVersion = 26.2;
 					};
 				};
 			};
@@ -113,12 +209,20 @@
 			projectRoot = "";
 			targets = (
 				B17DCF952EE94EC800B2EAC0 /* projectHer */,
+				B1DFA63C2F294EA20066C325 /* PanduWidgetsExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B17DCF942EE94EC800B2EAC0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B1DFA63B2F294EA20066C325 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +239,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B1DFA6392F294EA20066C325 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B1DFA6522F294EA50066C325 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B1DFA63C2F294EA20066C325 /* PanduWidgetsExtension */;
+			targetProxy = B1DFA6512F294EA50066C325 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B17DCFA12EE94ECB00B2EAC0 /* Debug */ = {
@@ -331,6 +450,70 @@
 			};
 			name = Release;
 		};
+		B1DFA6552F294EA50066C325 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 99327TCA93;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PanduWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = PanduWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = harshit.projectHer.PanduWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B1DFA6562F294EA50066C325 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 99327TCA93;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PanduWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = PanduWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = harshit.projectHer.PanduWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -348,6 +531,15 @@
 			buildConfigurations = (
 				B17DCFA42EE94ECB00B2EAC0 /* Debug */,
 				B17DCFA52EE94ECB00B2EAC0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B1DFA6542F294EA50066C325 /* Build configuration list for PBXNativeTarget "PanduWidgetsExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1DFA6552F294EA50066C325 /* Debug */,
+				B1DFA6562F294EA50066C325 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

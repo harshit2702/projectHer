@@ -33,5 +33,15 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Live Activities Support -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<!-- Calendar Access for Context -->
+	<key>NSCalendarsUsageDescription</key>
+	<string>Pandu can reference your upcoming events to be more helpful in conversations.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Pandu can reference your upcoming events to be more helpful in conversations.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Pandu can see your reminders to help you stay organized.</string>
 </dict>
 </plist>

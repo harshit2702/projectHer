@@ -131,9 +131,9 @@ struct MemoryDashboardView: View {
         request.setValue(AppConfig.apiKey, forHTTPHeaderField: "X-API-Key")
         
         URLSession.shared.dataTask(with: request) { data, _, _ in
-            if let data = data,
-               let statsData = try? JSONDecoder().decode(MemoryStats.self, from: data) {
-                DispatchQueue.main.async {
+            guard let data = data else { return }
+            DispatchQueue.main.async {
+                if let statsData = try? JSONDecoder().decode(MemoryStats.self, from: data) {
                     self.stats = statsData
                 }
             }

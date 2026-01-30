@@ -1,18 +1,18 @@
-import SwiftUI
-import SwiftData
 import AVFoundation
+import SwiftData
+import SwiftUI
 
 struct ContentView: View {
     // 1. Database Connection
     @Environment(\.modelContext) private var modelContext
-    
+
     // 2. Session Query (lightweight - only metadata)
     @Query(sort: \ChatSession.lastMessageAt, order: .reverse)
     private var allSessions: [ChatSession]
-    
+
     // ✅ REMOVED: @Query private var allMessages: [ChatMessage]
     // We no longer load ALL messages into memory!
-    
+
     // 3. UI State
     @State private var activeSessionID: UUID?
     @State private var showingDrawer = false
@@ -32,18 +32,19 @@ struct ContentView: View {
 
     @StateObject private var stt = LiveSTT(localeId: "en-IN")
     @StateObject private var tts = TTSManager()
-    
+
     @State private var showingSettings = false
     @AppStorage("selectedVoiceId") private var selectedVoiceId: String = ""
     @AppStorage("voicePitch") private var voicePitch: Double = 1.0
-    @AppStorage("voiceRate") private var voiceRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
+    @AppStorage("voiceRate") private var voiceRate: Double = Double(
+        AVSpeechUtteranceDefaultSpeechRate)
     @AppStorage("silenceDuration") private var silenceDuration: Double = 1.5
     @AppStorage("showEmotionalState") private var showEmotionalState: Bool = true
-    
+
     // Linking State
     @State private var linkingMode = false
     @State private var sourceMemoryForLinking: ChatMessage?
-    
+
     // Derived active session from Query to ensure consistency
     var activeSession: ChatSession? {
         if let id = activeSessionID {
@@ -51,210 +52,216 @@ struct ContentView: View {
         }
         return nil
     }
-    
+
     // ✅ OPTIMIZED: Get messages directly from active session's relationship
     var sessionMessages: [ChatMessage] {
         guard let session = activeSession else { return [] }
         return session.messages.sorted { $0.timestamp < $1.timestamp }
     }
-    
+
     // Group messages by date and sort groups chronologically
     var messagesByDate: [(key: String, value: [ChatMessage])] {
         let grouped = Dictionary(grouping: sessionMessages) { message in
             message.timestamp.dateGroupHeader()
         }
-        
+
         return grouped.sorted { (group1, group2) in
             let date1 = group1.value.first?.timestamp ?? Date.distantPast
             let date2 = group2.value.first?.timestamp ?? Date.distantPast
             return date1 < date2
         }
     }
-    
+
     // ⚠️ Configuration moved to AppConfig.swift
     let serverURL = AppConfig.serverURL
     let apiKey = AppConfig.apiKey
-    
+
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-            // Main chat view
-            VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Button(action: { showingDrawer.toggle() }) {
-                        Image(systemName: "line.3.horizontal")
-                            .font(.title2)
-                            .foregroundColor(.primary)
-                    }
-                    
-                    Spacer()
-                    
-                    Text(activeSession?.title ?? "Pandu ❤️")
-                        .font(.title2).bold()
-                    
-                    if showEmotionalState {
-                        VStack(spacing: 2) {
-                            Text(EmotionEngine.shared.getCurrentMood())
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.purple)
-                            
-                            HStack(spacing: 2) {
-                                Image(systemName: "bolt.fill")
+                // Main chat view
+                VStack(spacing: 0) {
+                    // Header
+                    HStack {
+                        Button(action: { showingDrawer.toggle() }) {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.title2)
+                                .foregroundColor(.primary)
+                        }
+
+                        Spacer()
+
+                        Text(activeSession?.title ?? "Pandu ❤️")
+                            .font(.title2).bold()
+
+                        if showEmotionalState {
+                            VStack(spacing: 2) {
+                                Text(EmotionEngine.shared.getCurrentMood())
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundColor(.purple)
+
+                                HStack(spacing: 2) {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 8))
+                                    Text(
+                                        String(
+                                            format: "%.1f", EmotionEngine.shared.getCurrentEnergy())
+                                    )
                                     .font(.system(size: 8))
-                                Text(String(format: "%.1f", EmotionEngine.shared.getCurrentEnergy()))
-                                    .font(.system(size: 8))
+                                }
+                                .foregroundColor(.orange)
                             }
-                            .foregroundColor(.orange)
+                        }
+
+                        Spacer()
+
+                        // ✅ Connection Status Indicator
+                        Circle()
+                            .fill(connectionStatus.color)
+                            .frame(width: 10, height: 10)
+                            .onTapGesture {
+                                checkConnection()
+                            }
+
+                        Menu {
+                            Button(action: { showingHealth = true }) {
+                                Label("Server Health", systemImage: "info.circle")
+                            }
+
+                            Button(action: { showingAvatar = true }) {
+                                Label("Video Call", systemImage: "video.fill")
+                            }
+
+                            Button(action: { showingMemoryDashboard = true }) {
+                                Label("Memory Dashboard", systemImage: "brain.head.profile")
+                            }
+
+                            Button(action: { showingSettings = true }) {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.title2)
+                                .foregroundColor(.primary)
+                                .padding(.leading, 8)
                         }
                     }
-                    
-                    Spacer()
-                    
-                    // ✅ Connection Status Indicator
-                    Circle()
-                        .fill(connectionStatus.color)
-                        .frame(width: 10, height: 10)
-                        .onTapGesture {
-                            checkConnection()
-                        }
-                    
-                    Menu {
-                        Button(action: { showingHealth = true }) {
-                            Label("Server Health", systemImage: "info.circle")
-                        }
-                        
-                        Button(action: { showingAvatar = true }) {
-                            Label("Video Call", systemImage: "video.fill")
-                        }
-                        
-                        Button(action: { showingMemoryDashboard = true }) {
-                            Label("Memory Dashboard", systemImage: "brain.head.profile")
-                        }
-                        
-                        Button(action: { showingSettings = true }) {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.title2)
-                            .foregroundColor(.primary)
-                            .padding(.leading, 8)
-                    }
-                }
-                .padding(.horizontal)
-                
-                // Chat Scroll Area
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(messagesByDate, id: \.key) { group in
-                                // Date separator
-                                Text(group.key)
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                                    .padding(.vertical, 8)
-                                
-                                // Messages for this date
-                                ForEach(group.value) { msg in
-                                    messageView(for: msg)
+                    .padding(.horizontal)
+
+                    // Chat Scroll Area
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(messagesByDate, id: \.key) { group in
+                                    // Date separator
+                                    Text(group.key)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                        .padding(.vertical, 8)
+
+                                    // Messages for this date
+                                    ForEach(group.value) { msg in
+                                        messageView(for: msg)
+                                    }
+                                }
+
+                                // Typing indicator
+                                if isTyping {
+                                    HStack {
+                                        TypingIndicatorView()
+                                        Spacer()
+                                    }
+                                    .id("TYPING_INDICATOR_ID")
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 2)
                                 }
                             }
-                            
-                            // Typing indicator
-                            if isTyping {
-                                HStack {
-                                    TypingIndicatorView()
-                                    Spacer()
-                                }
-                                .id("TYPING_INDICATOR_ID")
-                                .padding(.horizontal)
-                                .padding(.vertical, 2)
-                            }
                         }
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .onChange(of: sessionMessages.count) { _, _ in
-                        if let last = sessionMessages.last {
-                            withAnimation {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
-                    }
-                    .onChange(of: activeSessionID) { _, _ in
-                        // Scroll to bottom when switching chats
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        .scrollDismissesKeyboard(.interactively)
+                        .onChange(of: sessionMessages.count) { _, _ in
                             if let last = sessionMessages.last {
                                 withAnimation {
                                     proxy.scrollTo(last.id, anchor: .bottom)
                                 }
                             }
                         }
-                    }
-                    .onChange(of: isTyping) { _, isTyping in
-                        if isTyping {
+                        .onChange(of: activeSessionID) { _, _ in
+                            // Scroll to bottom when switching chats
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                withAnimation {
-                                    proxy.scrollTo("TYPING_INDICATOR_ID", anchor: .bottom)
+                                if let last = sessionMessages.last {
+                                    withAnimation {
+                                        proxy.scrollTo(last.id, anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
+                        .onChange(of: isTyping) { _, isTyping in
+                            if isTyping {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation {
+                                        proxy.scrollTo("TYPING_INDICATOR_ID", anchor: .bottom)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                
-                // Input Field
-                InputBarView(
-                    inputText: $inputText,
-                    isTyping: isTyping,
-                    isSpeaking: tts.isSpeaking,
-                    voiceMode: $voiceMode,
-                    transcript: stt.transcript,
-                    isListening: stt.isListening,
-                    onSendText: { sendMessage(text: inputText) },
-                    onEnterVoiceMode: {
-                        Task {
-                            do {
-                                voiceMode = true
-                                try await stt.requestPermissions()
-                                try stt.start()
-                            } catch {
-                                voiceMode = false
+
+                    // Input Field
+                    InputBarView(
+                        inputText: $inputText,
+                        isTyping: isTyping,
+                        isSpeaking: tts.isSpeaking,
+                        voiceMode: $voiceMode,
+                        transcript: stt.transcript,
+                        isListening: stt.isListening,
+                        onSendText: { sendMessage(text: inputText) },
+                        onEnterVoiceMode: {
+                            Task {
+                                do {
+                                    voiceMode = true
+                                    try await stt.requestPermissions()
+                                    try stt.start()
+                                } catch {
+                                    voiceMode = false
+                                }
                             }
-                        }
-                    },
-                    onToggleMic: {
-                        if stt.isListening {
+                        },
+                        onToggleMic: {
+                            if stt.isListening {
+                                stt.stop()
+                            } else {
+                                Task {
+                                    try? await stt.requestPermissions()
+                                    try? stt.start()
+                                }
+                            }
+                        },
+                        onCancelVoice: {
                             stt.stop()
-                        } else {
-                            Task { try? await stt.requestPermissions(); try? stt.start() }
+                            voiceMode = false
                         }
-                    },
-                    onCancelVoice: {
-                        stt.stop()
-                        voiceMode = false
-                    }
-                )
-            }
-            
-            // Drawer overlay
-            if showingDrawer {
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                    .onTapGesture { showingDrawer = false }
-                
-                HistoryDrawerView(
-                    onSelectSession: { session in
-                        switchToSession(session)
-                        showingDrawer = false
-                    },
-                    onNewChat: {
-                        createNewChat()
-                        showingDrawer = false
-                    }
-                )
-                .frame(width: geometry.size.width * 0.8)
-                .transition(.move(edge: .leading))
-            }
+                    )
+                }
+
+                // Drawer overlay
+                if showingDrawer {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture { showingDrawer = false }
+
+                    HistoryDrawerView(
+                        onSelectSession: { session in
+                            switchToSession(session)
+                            showingDrawer = false
+                        },
+                        onNewChat: {
+                            createNewChat()
+                            showingDrawer = false
+                        }
+                    )
+                    .frame(width: geometry.size.width * 0.8)
+                    .transition(.move(edge: .leading))
+                }
             }
         }
         .animation(.easeInOut, value: showingDrawer)
@@ -262,10 +269,10 @@ struct ContentView: View {
             loadOrCreateActiveSession()
             checkConnection()
             EmotionEngine.shared.wakeUp()
-            
+
             // Sync silence duration
             stt.silenceSeconds = silenceDuration
-            
+
             stt.onFinal = { finalText in
                 DispatchQueue.main.async {
                     // Temporarily stop listening while processing/sending
@@ -273,7 +280,7 @@ struct ContentView: View {
                     self.sendMessage(text: finalText)
                 }
             }
-            
+
             tts.onFinish = {
                 // Hands-free: if we are still in voice mode, resume listening
                 if self.voiceMode {
@@ -296,11 +303,14 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView(tts: tts)
         }
-        .sheet(isPresented: $showingMemorySearch, onDismiss: {
-            // Reset linking mode on dismiss
-            linkingMode = false
-            sourceMemoryForLinking = nil
-        }) {
+        .sheet(
+            isPresented: $showingMemorySearch,
+            onDismiss: {
+                // Reset linking mode on dismiss
+                linkingMode = false
+                sourceMemoryForLinking = nil
+            }
+        ) {
             MemorySearchView(
                 selectionMode: linkingMode,
                 onSelect: { targetMemory in
@@ -309,23 +319,23 @@ struct ContentView: View {
                             source: sourceMemoryForLinking?.serverId,
                             target: targetMemory.id
                         )
-                        showingMemorySearch = false // Dismiss sheet
+                        showingMemorySearch = false  // Dismiss sheet
                     }
                 }
             )
         }
         .alert("Linking Error", isPresented: $showingLinkAlert) {
-            Button("OK", role: .cancel) { }
+            Button("OK", role: .cancel) {}
         } message: {
             Text(linkAlertMessage)
         }
     }
-    
+
     @ViewBuilder
     private func messageView(for msg: ChatMessage) -> some View {
         HStack {
             if msg.isUser { Spacer() }
-            
+
             VStack(alignment: msg.isUser ? .trailing : .leading, spacing: 2) {
                 Text(msg.text)
                     .padding()
@@ -336,7 +346,7 @@ struct ContentView: View {
                         Button(action: { showLinkingSheet(for: msg) }) {
                             Label("Link Memory", systemImage: "link")
                         }
-                        
+
                         if msg.status == .failed {
                             Button(action: { retryMessage(msg) }) {
                                 Label("Retry", systemImage: "arrow.clockwise")
@@ -354,13 +364,13 @@ struct ContentView: View {
                                 .offset(x: 4, y: 4)
                         }
                     }
-                
+
                 // Timestamp
                 Text(msg.timestamp.relativeTimeString())
                     .font(.caption2)
                     .foregroundColor(.gray)
                     .padding(.horizontal, 8)
-                
+
                 if !msg.isUser && msg.type == "future_plan" {
                     Button(action: { markAsResolved(msg) }) {
                         Label("Mark Complete", systemImage: "checkmark.circle")
@@ -369,7 +379,7 @@ struct ContentView: View {
                     .padding(.horizontal, 8)
                     .padding(.bottom, 4)
                 }
-                
+
                 if !msg.isUser && msg.usedContext {
                     HStack(spacing: 4) {
                         Image(systemName: "brain.head.profile")
@@ -382,16 +392,16 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: 250, alignment: msg.isUser ? .trailing : .leading)
-            
+
             if !msg.isUser { Spacer() }
         }
         .padding(.horizontal)
         .padding(.vertical, 2)
         .id(msg.id)
     }
-    
+
     // MARK: - Session Management
-    
+
     func loadOrCreateActiveSession() {
         // Try to find existing active session
         if let active = allSessions.first(where: { $0.isActive }) {
@@ -405,73 +415,73 @@ struct ContentView: View {
             activeSessionID = newSession.id
         }
     }
-    
+
     // ✅ FIXED: Proper session switching with ID
     func switchToSession(_ session: ChatSession) {
         // Deactivate all sessions
         for s in allSessions {
             s.isActive = false
         }
-        
+
         // Activate target session
         session.isActive = true
-        
+
         // Update active session ID
         activeSessionID = session.id
-        
+
         // Save changes immediately
         try? modelContext.save()
     }
-    
+
     func createNewChat() {
         print("🆕 Creating new chat")
-        
+
         // Deactivate current session
         if let current = activeSession {
             current.isActive = false
         }
-        
+
         // Create new session
         let newSession = ChatSession()
         modelContext.insert(newSession)
-        
+
         // Save immediately to get ID
         try? modelContext.save()
-        
+
         activeSessionID = newSession.id
         inputText = ""
-        
+
         print("✅ Created new session: \(newSession.title)")
     }
-    
+
     // MARK: - Message Handling
-    
+
     func showLinkingSheet(for message: ChatMessage) {
         sourceMemoryForLinking = message
         linkingMode = true
         showingMemorySearch = true
     }
-    
+
     func linkMemories(source: String?, target: String) {
         guard let sourceId = source else {
             linkAlertMessage = "This message has no memory_id yet"
             showingLinkAlert = true
             return
         }
-        
+
         let payload = MemoryLinkRequest(
             source_id: sourceId,
             target_id: target
         )
-        
+
         guard let url = URL(string: "\(serverURL)/memory/link") else { return }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.httpBody = try? JSONEncoder().encode(payload)
-        
+
         URLSession.shared.dataTask(with: request) { _, response, error in
             DispatchQueue.main.async {
                 if error == nil {
@@ -482,94 +492,96 @@ struct ContentView: View {
             }
         }.resume()
     }
-    
+
     func markAsResolved(_ message: ChatMessage) {
         guard let memoryId = message.serverId else { return }
-        
-        guard let url = URL(string: "\(serverURL)/memory/resolve?memory_id=\(memoryId)") else { return }
-        
+
+        guard let url = URL(string: "\(serverURL)/memory/resolve?memory_id=\(memoryId)") else {
+            return
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        
+
         URLSession.shared.dataTask(with: request) { _, _, error in
             if error == nil {
                 print("✅ Task marked as resolved")
             }
         }.resume()
     }
-    
+
     func deleteMessage(_ message: ChatMessage) {
         modelContext.delete(message)
         print("🗑️ Deleted message")
     }
-    
+
     func retryMessage(_ message: ChatMessage) {
         let textToRetry = message.text
-        
+
         // Delete failed message
         modelContext.delete(message)
-        
+
         // Resend
         sendMessage(text: textToRetry)
     }
-    
+
     // ✅ FIXED: Pass session object instead of ID
     func sendMessage(text: String) {
         guard let session = activeSession else {
             print("❌ No active session")
             return
         }
-        
+
         let messageText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !messageText.isEmpty else { return }
-        
+
         // 1. Update Emotion Engine
         EmotionEngine.shared.processUserMessage(messageText)
-        
+
         // Create message with session relationship
         let userMsg = ChatMessage(text: messageText, isUser: true, session: session)
         userMsg.status = .sending
         modelContext.insert(userMsg)
-        
+
         // ✅ IMPORTANT: Explicitly add to relationship for instant UI update
         session.messages.append(userMsg)
         session.lastMessageAt = Date()
-        
+
         inputText = ""
         isTyping = true
-        
+
         // Build history from session messages
         let historyItems = sessionMessages.suffix(5).map {
             HistoryItem(role: $0.isUser ? "user" : "assistant", content: $0.text)
         }
-        
+
         guard let url = URL(string: "\(serverURL)/chat") else {
             userMsg.status = .failed
             connectionStatus = .disconnected
             isTyping = false
             return
         }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.timeoutInterval = 120
-        
+
         let payload = ChatRequest(
-            message: messageText, 
+            message: messageText,
             history: historyItems,
             context_chain_id: session.contextChainId,
             mood: EmotionEngine.shared.getCurrentMood(),
             tone_instruction: EmotionEngine.shared.getToneInstruction()
         )
         request.httpBody = try? JSONEncoder().encode(payload)
-        
+
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 isTyping = false
-                
+
                 // Network error
                 if let error = error {
                     userMsg.status = .failed
@@ -577,7 +589,7 @@ struct ContentView: View {
                     print("❌ Network error: \(error.localizedDescription)")
                     return
                 }
-                
+
                 // HTTP status check
                 if let httpResponse = response as? HTTPURLResponse {
                     switch httpResponse.statusCode {
@@ -597,16 +609,17 @@ struct ContentView: View {
                         return
                     }
                 }
-                
+
                 // Parse response
                 if let data = data,
-                   let response = try? JSONDecoder().decode(ServerResponse.self, from: data) {
+                    let response = try? JSONDecoder().decode(ServerResponse.self, from: data)
+                {
                     userMsg.status = .sent
-                    
+
                     // Create AI reply with session relationship
                     let reply = ChatMessage(
-                        text: response.reply, 
-                        isUser: false, 
+                        text: response.reply,
+                        isUser: false,
                         session: session,
                         usedContext: response.context_used,
                         serverId: response.memory_id,
@@ -614,23 +627,34 @@ struct ContentView: View {
                     )
                     reply.status = .sent
                     modelContext.insert(reply)
-                    
+
                     // Add to relationship
                     session.messages.append(reply)
                     session.lastMessageAt = Date()
-                    
+
+                    // 🆕 Sync outfit if changed via chat
+                    if response.outfit_changed == true, let outfitId = response.outfit_changed_to {
+                        if let newOutfit = WardrobeManager.shared.wardrobe.first(where: {
+                            $0.id == outfitId
+                        }) {
+                            WardrobeManager.shared.currentOutfit.base = newOutfit
+                            print("👗 Outfit synced from chat: \(outfitId)")
+                        }
+                    }
+
                     print("✅ Message sent and reply received")
 
                     // Speak if auto-speak is on AND (Voice Mode OR Video Call is active)
                     if self.autoSpeakReplies && (self.voiceMode || self.showingAvatar) {
-                        self.stt.stop() // ensure mic is off while speaking
-                        self.tts.speak(response.reply, 
-                                       voiceId: self.selectedVoiceId,
-                                       pitchMultiplier: Float(self.voicePitch),
-                                       rate: Float(self.voiceRate))
+                        self.stt.stop()  // ensure mic is off while speaking
+                        self.tts.speak(
+                            response.reply,
+                            voiceId: self.selectedVoiceId,
+                            pitchMultiplier: Float(self.voicePitch),
+                            rate: Float(self.voiceRate))
                     } else {
                         // If not speaking, and we are in voice mode, maybe resume listening?
-                        // Depending on UX preference. For now, let's respect hands-free logic only if TTS was involved 
+                        // Depending on UX preference. For now, let's respect hands-free logic only if TTS was involved
                         // OR if we want 'silent' hands-free, we'd trigger stt.start() here.
                         // But usually voice mode implies hearing the response.
                     }
@@ -642,19 +666,19 @@ struct ContentView: View {
             }
         }.resume()
     }
-    
+
     // ✅ NEW: Dedicated connection check (cleaner than hijacking sendMessage)
     func checkConnection() {
         connectionStatus = .checking
-        
+
         guard let url = URL(string: "\(serverURL)/health") else {
             connectionStatus = .disconnected
             return
         }
-        
+
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
-        
+
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if error != nil {

@@ -87,6 +87,8 @@ struct ServerResponse: Codable {
     let status: String?
     let memory_id: String?
     let type: String?
+    let outfit_changed: Bool?          // 🆕 True if outfit was changed via chat
+    let outfit_changed_to: String?     // 🆕 The outfit ID to sync in iOS
 }
 
 struct SyncResponse: Codable {

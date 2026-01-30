@@ -84,22 +84,29 @@ class BackgroundManager {
                 }
             }
             
-            guard let data = data,
-                  let syncResponse = try? JSONDecoder().decode(SyncResponse.self, from: data) else {
+            guard let data = data else {
                 self.logSyncError("Invalid response format")
                 completion(false)
                 return
             }
             
-            if !syncResponse.messages.isEmpty {
-                // ✅ FIXED: Use background context with proper Task isolation
-                Task.detached(priority: .background) {
+            // Decode on background thread, then process
+            Task.detached(priority: .background) {
+                guard let syncResponse = try? JSONDecoder().decode(SyncResponse.self, from: data) else {
+                    self.logSyncError("Invalid response format")
+                    completion(false)
+                    return
+                }
+                
+                if !syncResponse.messages.isEmpty {
                     await self.saveMessagesToDatabase(syncResponse.messages)
-                    self.logSyncSuccess()
+                    await MainActor.run {
+                        self.logSyncSuccess()
+                    }
+                    completion(true)
+                } else {
                     completion(true)
                 }
-            } else {
-                completion(true)
             }
         }.resume()
     }

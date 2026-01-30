@@ -159,11 +159,11 @@ class AvatarScene: SKScene, ObservableObject {
         scarfFront.zPosition = 30
         
         // Initial Accessory Visibility/Texture logic
-        if let pendant = currentOutfit.accessories.first(where: { $0.id == "pendant" }) {
+        if currentOutfit.accessories.contains(where: { $0.id == "pendant" }) {
             scarfFront.texture = SKTexture(imageNamed: "pendant")
             scarfFront.position = CGPoint(x: 0, y: -50)
             scarfFront.isHidden = false
-        } else if let scarf = currentOutfit.accessories.first(where: { $0.id == "scarf" }) {
+        } else if currentOutfit.accessories.contains(where: { $0.id == "scarf" }) {
             scarfFront.texture = SKTexture(imageNamed: "scarf_front")
             scarfFront.position = CGPoint(x: 0, y: 0)
             scarfFront.isHidden = false
