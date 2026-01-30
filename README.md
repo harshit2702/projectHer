@@ -11,10 +11,18 @@ So I built **Pandu**. She's not just a chatbot; she's a legit companion. She rem
 ## 🚀 What makes this special?
 
 ### 🧠 She Actually Remembers (No, Really)
-Most AIs reset every session. Pandu has a **persistent memory**.
-- **Context Awareness:** If you tell her you're stressed about an exam on Friday, she'll ask you about it on Saturday.
-- **Memory Dashboard:** You can literally pop the hood and see her "brain"—what she knows about you, what memories she's stored, etc.
-- **Linking:** You can manually link messages to memories if you want to force a connection. It's like inception but for AI.
+Most AIs reset every session. Pandu has a **persistent memory** powered by a custom backend.
+
+| Feature | What It Does |
+|---------|--------------|
+| **Context Awareness** | Tell her you're stressed about an exam on Friday → she'll ask you about it on Saturday |
+| **Calendar Sync** | She knows your schedule. Meeting at 3 PM? She won't bug you (or she might wish you luck) |
+| **Memory Dashboard** | Pop the hood and see her "brain"—what she knows about you, memories stored, etc. |
+| **Session History** | Chat sessions are saved locally with SwiftData. Scroll back through old convos anytime |
+
+The memory system isn't just basic key-value storage. It's organized, searchable, and actually contextual. You can even search through her memories in the app!
+
+---
 
 ### 🗣️ Voice & Video (Facetime Vibes)
 Texting is cool, but sometimes you just wanna talk.
