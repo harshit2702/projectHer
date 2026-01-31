@@ -15,11 +15,17 @@
 	<array>
 		<string>fetch</string>
 		<string>processing</string>
+		<string>audio</string>
+		<string>voip</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>We need access to your microphone for voice interaction.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We use speech recognition to transcribe your voice commands.</string>
+	<key>CFBundleDisplayName</key>
+	<string>Pandu</string>
+	<key>CFBundleSpokenName</key>
+	<string>Pandu</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

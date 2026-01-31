@@ -6,6 +6,9 @@ struct AvatarView: View {
     @ObservedObject var tts: TTSManager
     @ObservedObject var stt: LiveSTT
     @Binding var voiceMode: Bool
+    
+    // 🆕 Background Call Service for call continuation
+    @StateObject private var callService = BackgroundCallService.shared
 
     // Scene (Held as a State object)
     @State private var scene: AvatarScene = {
@@ -18,6 +21,7 @@ struct AvatarView: View {
 
     // UI State
     @State private var showCustomize = false
+    @State private var isMinimized = false  // 🆕 For background mode
 
     // Customization State
     @ObservedObject var wardrobe = WardrobeManager.shared
@@ -52,6 +56,28 @@ struct AvatarView: View {
 
             // 2. Controls Overlay
             controlsOverlay
+            
+            // 3. 🆕 Background call indicator (when call is active but view minimized)
+            if callService.isCallActive {
+                VStack {
+                    // Call duration badge at top
+                    HStack {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 10, height: 10)
+                        Text("Call Active • \(callService.formattedDuration)")
+                            .font(.caption.bold())
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.black.opacity(0.7))
+                    .clipShape(Capsule())
+                    .padding(.top, 60)
+                    
+                    Spacer()
+                }
+            }
         }
         .sheet(isPresented: $showCustomize) {
             customizationSheet
@@ -70,6 +96,11 @@ struct AvatarView: View {
                 tts.speak(
                     text, voiceId: selectedVoiceId, pitchMultiplier: Float(voicePitch),
                     rate: Float(voiceRate))
+            }
+            
+            // 🆕 Start background call on appear (makes call continue when minimized)
+            Task {
+                try? await callService.startCall()
             }
         }
         .onChange(of: wardrobe.currentOutfit.base.id) { _, _ in
@@ -93,6 +124,8 @@ struct AvatarView: View {
         }
         .onDisappear {
             windSyncTimer?.invalidate()
+            // Note: Don't end call on disappear - that's the point of background calls!
+            // Call ends only when user explicitly ends it
         }
     }
 
@@ -223,9 +256,27 @@ struct AvatarView: View {
                         .foregroundColor(voiceMode ? .black : .white)
                         .clipShape(Circle())
                 }
+                
+                // 🆕 Minimize button - keep call running in background
+                Button(action: {
+                    // Dismiss view but keep call active
+                    dismiss()
+                }) {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .font(.title2)
+                        .frame(width: 60, height: 60)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .clipShape(Circle())
+                }
 
-                // End Call
-                Button(action: { dismiss() }) {
+                // End Call - completely ends the background call
+                Button(action: {
+                    Task {
+                        await callService.endCall()
+                        dismiss()
+                    }
+                }) {
                     Image(systemName: "phone.down.fill")
                         .font(.title2)
                         .frame(width: 60, height: 60)

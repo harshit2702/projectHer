@@ -44,6 +44,14 @@ struct ContentView: View {
     // Linking State
     @State private var linkingMode = false
     @State private var sourceMemoryForLinking: ChatMessage?
+    
+    // 🆕 Deep Link Action (from notification tap)
+    @Binding var pendingDeepLinkAction: ProjectHerApp.DeepLinkAction?
+
+    // 🆕 Initialize with optional deep link binding
+    init(pendingDeepLinkAction: Binding<ProjectHerApp.DeepLinkAction?> = .constant(nil)) {
+        _pendingDeepLinkAction = pendingDeepLinkAction
+    }
 
     // Derived active session from Query to ensure consistency
     var activeSession: ChatSession? {
@@ -241,6 +249,20 @@ struct ContentView: View {
                             voiceMode = false
                         }
                     )
+                    
+                    // 🆕 Mini call indicator when call is running in background
+                    MiniCallView(
+                        onTap: {
+                            // Return to video call view
+                            showingAvatar = true
+                        },
+                        onEndCall: {
+                            Task {
+                                await BackgroundCallService.shared.endCall()
+                            }
+                        }
+                    )
+                    .padding(.bottom, 80)
                 }
 
                 // Drawer overlay
@@ -286,6 +308,13 @@ struct ContentView: View {
                 if self.voiceMode {
                     Task { try? self.stt.start() }
                 }
+            }
+        }
+        // 🆕 Handle deep link actions from notifications
+        .onChange(of: pendingDeepLinkAction) { _, action in
+            if let action = action {
+                handleDeepLinkAction(action)
+                pendingDeepLinkAction = nil
             }
         }
         .onChange(of: silenceDuration) { _, newValue in
@@ -452,6 +481,25 @@ struct ContentView: View {
         inputText = ""
 
         print("✅ Created new session: \(newSession.title)")
+    }
+    
+    // MARK: - Deep Link Handling
+    
+    /// Handle deep link actions (e.g., from notifications)
+    func handleDeepLinkAction(_ action: ProjectHerApp.DeepLinkAction) {
+        switch action {
+        case .openNewChat:
+            print("📱 Deep link: Opening new chat from notification")
+            createNewChat()
+        case .openChat(let sessionId):
+            if let id = sessionId, let session = allSessions.first(where: { $0.id == id }) {
+                print("📱 Deep link: Opening specific chat \(id)")
+                switchToSession(session)
+            } else {
+                print("📱 Deep link: Session not found, creating new chat")
+                createNewChat()
+            }
+        }
     }
 
     // MARK: - Message Handling

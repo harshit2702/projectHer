@@ -54,44 +54,66 @@ struct PanduStatusProvider: TimelineProvider {
     }
     
     func getSnapshot(in context: Context, completion: @escaping (PanduStatusEntry) -> Void) {
-        // For preview, try cache first
-        if let cached = WidgetAPIService.shared.loadCachedWidgetData(), !cached.isStale {
-            completion(entry(from: cached.status))
+        // For preview/gallery, try cache first then fetch
+        if context.isPreview {
+            if let cached = WidgetAPIService.shared.loadCachedWidgetData() {
+                completion(entry(from: cached.status))
+            } else {
+                completion(.placeholder)
+            }
         } else {
-            completion(.placeholder)
+            // For actual widget, always try to fetch fresh data
+            Task {
+                do {
+                    let status = try await WidgetAPIService.shared.fetchWidgetStatus()
+                    WidgetAPIService.shared.cacheWidgetData(status)
+                    completion(entry(from: status))
+                } catch {
+                    if let cached = WidgetAPIService.shared.loadCachedWidgetData() {
+                        completion(entry(from: cached.status))
+                    } else {
+                        completion(.placeholder)
+                    }
+                }
+            }
         }
     }
     
     func getTimeline(in context: Context, completion: @escaping (Timeline<PanduStatusEntry>) -> Void) {
         Task {
             do {
+                print("🔄 Widget: Fetching fresh status...")
                 let status = try await WidgetAPIService.shared.fetchWidgetStatus()
                 WidgetAPIService.shared.cacheWidgetData(status)
                 
                 let entry = self.entry(from: status)
                 
-                // Refresh every 15 minutes, or sooner if traveling/sleeping
+                // 🆕 More aggressive refresh schedule
                 let refreshInterval: TimeInterval
                 if status.isTraveling {
                     refreshInterval = 60 // 1 minute during travel
                 } else if status.isSleeping {
-                    refreshInterval = 300 // 5 minutes during sleep
+                    refreshInterval = 180 // 3 minutes during sleep (was 5)
                 } else {
-                    refreshInterval = 900 // 15 minutes normally
+                    refreshInterval = 600 // 10 minutes normally (was 15)
                 }
+                
+                print("📱 Widget: Updated! Mood=\(status.mood), Location=\(status.location), Next refresh in \(Int(refreshInterval/60))min")
                 
                 let nextUpdate = Date().addingTimeInterval(refreshInterval)
                 let timeline = Timeline(entries: [entry], policy: .after(nextUpdate))
                 completion(timeline)
                 
             } catch {
+                print("⚠️ Widget: Fetch failed, using cache. Error: \(error)")
                 // Use cached data on error
                 if let cached = WidgetAPIService.shared.loadCachedWidgetData() {
                     let entry = self.entry(from: cached.status)
-                    let timeline = Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(300)))
+                    // Retry sooner on error
+                    let timeline = Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(120)))
                     completion(timeline)
                 } else {
-                    let timeline = Timeline(entries: [PanduStatusEntry.placeholder], policy: .after(Date().addingTimeInterval(300)))
+                    let timeline = Timeline(entries: [PanduStatusEntry.placeholder], policy: .after(Date().addingTimeInterval(120)))
                     completion(timeline)
                 }
             }

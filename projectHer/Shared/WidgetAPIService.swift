@@ -93,6 +93,21 @@ struct SiriThinkingResponse: Codable {
     }
 }
 
+/// Chat response from /chat endpoint (for Siri messages)
+struct ChatResponse: Codable {
+    let reply: String
+    let memoryId: String?
+    let contextUsed: Bool?
+    let type: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case reply
+        case memoryId = "memory_id"
+        case contextUsed = "context_used"
+        case type
+    }
+}
+
 /// Live Activity status response
 struct LiveActivityStatusResponse: Codable {
     let activityType: String?
@@ -187,9 +202,17 @@ class WidgetAPIService {
         return try await post("/siri/thinking-of-you", body: ["message": message])
     }
     
-    /// Siri: "Tell Pandu [message]"
+    /// Siri: "Tell Pandu [message]" (legacy - kept for compatibility)
     func sendMessage(_ message: String) async throws -> SiriThinkingResponse {
         return try await post("/siri/send-message", body: ["message": message])
+    }
+    
+    /// Siri: Send message through /chat endpoint for real AI conversation
+    func sendChatMessage(_ message: String) async throws -> ChatResponse {
+        return try await post("/chat", body: [
+            "message": message,
+            "source": "siri"  // Let backend know this came from Siri
+        ])
     }
     
     // MARK: - Live Activity Endpoints

@@ -1,13 +1,7 @@
-//
-//  projectHerApp.swift
-//  projectHer
-//
-//  Created by Harshit Agarwal on 10/12/25.
-//
-
 import SwiftUI
 import SwiftData
 import WidgetKit
+import AppIntents
 
 @main
 struct ProjectHerApp: App {
@@ -15,6 +9,14 @@ struct ProjectHerApp: App {
     
     // 1. Create the Database Container
     let sharedModelContainer: ModelContainer
+    
+    // 🆕 Deep link action to trigger new chat
+    @State private var pendingDeepLinkAction: DeepLinkAction?
+    
+    enum DeepLinkAction: Equatable {
+        case openNewChat
+        case openChat(sessionId: UUID?)
+    }
     
     init() {
         do {
@@ -27,6 +29,9 @@ struct ProjectHerApp: App {
             // 3. Save API config to App Group for widgets
             WidgetAPIService.saveConfigToAppGroup()
             
+            // 4. Force Siri to update its shortcut index
+            updateSiriShortcuts()
+            
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
@@ -34,7 +39,7 @@ struct ProjectHerApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(pendingDeepLinkAction: $pendingDeepLinkAction)
                 .onAppear {
                     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
                     
@@ -51,9 +56,8 @@ struct ProjectHerApp: App {
                     }
                 }
                 .onOpenURL { url in
-                    print("App opened via notification: \(url)")
-                    // Trigger manual sync when opened via notification/URL
-                    BackgroundManager.shared.forceCheck()
+                    print("📱 App opened via URL: \(url)")
+                    handleDeepLink(url)
                 }
         }
         // 3. Inject Database into View Hierarchy
@@ -80,6 +84,56 @@ struct ProjectHerApp: App {
                 
             default:
                 break
+            }
+        }
+    }
+    
+    // MARK: - Deep Link Handling
+    
+    /// Handle deep links from notifications
+    private func handleDeepLink(_ url: URL) {
+        // Expected format: my-ai-app://open?action=newchat
+        // or: my-ai-app://notification (legacy)
+        
+        if url.host == "notification" || url.path.contains("notification") {
+            // Open new chat first, then sync
+            pendingDeepLinkAction = .openNewChat
+            
+            // Delay forceCheck to allow new chat creation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                BackgroundManager.shared.forceCheck()
+            }
+        } else if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let action = components.queryItems?.first(where: { $0.name == "action" })?.value {
+            
+            switch action {
+            case "newchat":
+                pendingDeepLinkAction = .openNewChat
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    BackgroundManager.shared.forceCheck()
+                }
+            default:
+                // Just force check for unknown actions
+                BackgroundManager.shared.forceCheck()
+            }
+        } else {
+            // Default: just force check
+            BackgroundManager.shared.forceCheck()
+        }
+    }
+    
+    // MARK: - Siri Shortcuts Update
+    
+    /// Force Siri to re-index app shortcuts (helps with "Hey Siri" recognition)
+    private func updateSiriShortcuts() {
+        if #available(iOS 16.0, *) {
+            Task {
+                do {
+                    try await PanduShortcuts.updateAppShortcutParameters()
+                    print("✅ Siri shortcuts updated")
+                } catch {
+                    print("⚠️ Failed to update Siri shortcuts: \(error)")
+                }
             }
         }
     }

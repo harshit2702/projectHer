@@ -5,6 +5,12 @@
 //  App Intents for Siri Shortcuts
 //  iOS 16+ modern App Intents framework
 //
+//  IMPORTANT: For "Hey Siri" to work:
+//  1. User must open Shortcuts app once after install
+//  2. Siri must be enabled for this app in Settings
+//  3. The app's display name must match the phrases
+//  4. On first run, iOS indexes these phrases (can take hours)
+//
 
 import AppIntents
 import SwiftUI
@@ -12,48 +18,62 @@ import SwiftUI
 // MARK: - Shortcut Provider
 
 struct PanduShortcuts: AppShortcutsProvider {
+    
+    /// Explicit app name for Siri phrases - MUST match your app's CFBundleDisplayName
+    @available(iOS 17.0, *)
+    static var shortcutTileColor: ShortcutTileColor = .pink
+    
     static var appShortcuts: [AppShortcut] {
+        // Status Check Shortcut
         AppShortcut(
             intent: PanduStatusIntent(),
             phrases: [
-                "How is \(.applicationName) doing?",
+                "How is \(.applicationName) doing",
                 "Check on \(.applicationName)",
-                "How's \(.applicationName)?",
-                "What's \(.applicationName)'s mood?"
+                "How's \(.applicationName)",
+                "\(.applicationName) status",
+                "Is \(.applicationName) okay",
+                "How is my girlfriend \(.applicationName) doing"
             ],
             shortTitle: "Check Status",
             systemImageName: "heart.fill"
         )
         
+        // Activity Check Shortcut
         AppShortcut(
             intent: PanduActivityIntent(),
             phrases: [
-                "What's \(.applicationName) working on?",
-                "What is \(.applicationName) doing?",
-                "\(.applicationName) activity"
+                "What's \(.applicationName) working on",
+                "What is \(.applicationName) doing",
+                "\(.applicationName) activity",
+                "What's my girlfriend \(.applicationName) doing"
             ],
             shortTitle: "Current Activity",
             systemImageName: "sparkles"
         )
         
+        // Thinking of You Shortcut
         AppShortcut(
             intent: ThinkingOfYouIntent(),
             phrases: [
                 "Tell \(.applicationName) I'm thinking of her",
                 "Send \(.applicationName) love",
                 "I miss \(.applicationName)",
-                "Thinking of \(.applicationName)"
+                "Send love to \(.applicationName)",
+                "Tell my girlfriend \(.applicationName) I miss her"
             ],
             shortTitle: "Send Love",
             systemImageName: "heart.circle.fill"
         )
         
+        // Send Message Shortcut (routes to /chat for real conversation)
         AppShortcut(
             intent: SendMessageIntent(),
             phrases: [
-                "Tell \(.applicationName)",
+                "Send a message to \(.applicationName)",
                 "Message \(.applicationName)",
-                "Send a message to \(.applicationName)"
+                "Tell \(.applicationName) something",
+                "Tell my girlfriend \(.applicationName) something"
             ],
             shortTitle: "Send Message",
             systemImageName: "bubble.left.fill"
@@ -162,13 +182,13 @@ struct ThinkingOfYouIntent: AppIntent {
 
 // MARK: - Send Message Intent
 
-/// "Tell Pandu [message]"
+/// "Tell Pandu [message]" - Queues message, she responds via notification
 struct SendMessageIntent: AppIntent {
     static var title: LocalizedStringResource = "Send Message to Pandu"
     static var description = IntentDescription("Send a custom message to Pandu. She'll respond via notification.")
     static var openAppWhenRun: Bool = false
     
-    @Parameter(title: "Message", description: "What do you want to tell her?")
+    @Parameter(title: "Message", description: "What do you want to tell her?", requestValueDialog: "What should I tell her?")
     var message: String
     
     static var parameterSummary: some ParameterSummary {
@@ -176,7 +196,9 @@ struct SendMessageIntent: AppIntent {
     }
     
     func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
-        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard !trimmedMessage.isEmpty else {
             return .result(
                 dialog: "What should I tell her?",
                 view: MessageSnippetView(status: "Need a message")
@@ -184,11 +206,12 @@ struct SendMessageIntent: AppIntent {
         }
         
         do {
-            let response = try await WidgetAPIService.shared.sendMessage(message)
+            // Use /siri/send-message - queues message, Pandu responds via notification
+            let response = try await WidgetAPIService.shared.sendMessage(trimmedMessage)
             
             return .result(
                 dialog: "\(response.speech)",
-                view: MessageSnippetView(status: "Sent: \"\(message.prefix(30))...\"")
+                view: MessageSnippetView(status: "Sent: \"\(trimmedMessage.prefix(30))\"")
             )
         } catch {
             return .result(
