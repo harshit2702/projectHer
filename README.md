@@ -255,15 +255,6 @@ See [LICENSE](LICENSE) for the full legal text.
 
 ---
 
-## 📬 Contact
-
-Got questions? Want to collab? Just wanna chat about AI companions?
-
-- **Creator:** Harshit
-- **Project Link:** [github.com/yourusername/projectHer](https://github.com/yourusername/projectHer)
-
----
-
 *Built with ❤️, caffeine, and way too many late nights by Harshit.*
 
-*If you're reading this README, you're already a legend. Now go build something cool.* 🚀
+*If you're reading this README, you're already a legend. Now go build something cool.* 
