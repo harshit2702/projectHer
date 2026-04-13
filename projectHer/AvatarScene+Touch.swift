@@ -1,6 +1,10 @@
 import SpriteKit
 import UIKit
 
+private let hairMessedAsset = "hair_2"   // texture shown immediately after a Pull gesture
+private let hairNeatAsset   = "hair"     // texture restored after the pull-reaction delay
+private let hairResetDelay: TimeInterval = 2.0  // seconds before hair returns to neat
+
 extension AvatarScene {
     
     // MARK: - Touch Handlers
@@ -126,76 +130,33 @@ extension AvatarScene {
     func triggerGesture(part: String, type: String, intensity: GestureIntensity = .moderate) {
         print("✨ Gesture: \(type) on \(part) [\(intensity.rawValue)]")
         
-        // Get the base gesture type for server (Pull Left/Right/Up/Down -> Pull)
         let baseGesture = type.hasPrefix("Pull") ? "Pull" : type
         
-        // Send to Server for context-aware reaction
-        Task {
-            do {
-                let response = try await NetworkManager.shared.recordInteraction(
-                    part: part,
-                    gesture: baseGesture,
-                    intensity: intensity.rawValue,
-                    isTalking: self.isTalking
-                )
-                
-                await MainActor.run {
-                    // 1. Play the server-determined reaction animation
-                    self.playReaction(reactionId: response.reaction_id, spawnHearts: response.spawn_hearts)
-                    
-                    // 2. Update hair state
-                    let assetName = (response.hair_state == "hair_neat") ? "hair" : response.hair_state
-                    self.hairBase?.texture = SKTexture(imageNamed: assetName)
-                    
-                    // 3. Show dialogue (silent mode = floating text, speak mode = TTS)
-                    if let dialogue = response.dialogue {
-                        self.showTouchDialogue(
-                            text: dialogue,
-                            mode: response.dialogue_mode,
-                            emotion: response.dialogue_emotion ?? "neutral"
-                        )
-                    }
-                    
-                    // 4. Trigger haptic based on outcome
-                    switch response.outcome {
-                    case "positive":
-                        self.triggerHaptic(type: "success")
-                    case "negative":
-                        self.triggerHaptic(type: "warning")
-                    default:
-                        self.triggerHaptic(type: "light")
-                    }
-                    
-                    print("🎭 Reaction: \(response.reaction_id) [\(response.outcome)] | Bonding: \(response.bonding_score)")
+        // 1. Play local reaction animation + haptic
+        handleReaction(part: part, type: type, intensity: intensity)
+        
+        // 2. Show local contextual dialogue from TouchSemantics
+        if let touchPart = TouchPart(rawValue: part),
+           let gestureType = GestureType(rawValue: baseGesture) {
+            let interaction = PhysicalInteraction(part: touchPart, gesture: gestureType, intensity: intensity.rawValue)
+            showFloatingText(interaction.contextDescription)
+        }
+        
+            // 3. Locally update hair state after a Pull gesture
+        if type.hasPrefix("Pull") {
+            hairBase?.texture = SKTexture(imageNamed: hairMessedAsset)
+            run(SKAction.sequence([
+                SKAction.wait(forDuration: hairResetDelay),
+                SKAction.run { [weak self] in
+                    self?.hairBase?.texture = SKTexture(imageNamed: hairNeatAsset)
                 }
-                
-            } catch {
-                print("❌ Failed to record interaction: \(error)")
-                // Fallback to local reaction if server fails
-                await MainActor.run {
-                    self.handleReactionFallback(part: part, type: type, intensity: intensity)
-                }
-            }
+            ]))
         }
         
         onGestureDetected?(part, type)
-        // Note: Reaction is now handled by server response, not locally
-        // handleReaction is only used as fallback when server is unreachable
     }
     
     // MARK: - Dialogue Display
-    
-    /// Shows touch dialogue as floating text or triggers TTS
-    func showTouchDialogue(text: String, mode: String, emotion: String) {
-        // Always show floating text so user sees it
-        showFloatingText(text)
-        
-        if mode == "speak" {
-            // Trigger TTS via callback (connected to TTSManager in AvatarView)
-            // This will also trigger lip sync via onChange(of: tts.isSpeaking)
-            onSpeakDialogue?(text, emotion)
-        }
-    }
     
     /// Shows floating text above the avatar that fades out
     func showFloatingText(_ text: String) {
@@ -234,14 +195,6 @@ extension AvatarScene {
         ])
         
         label.run(sequence)
-    }
-    
-    // MARK: - Fallback Reaction (when server unreachable)
-    
-    /// Local fallback reactions when server is unavailable
-    func handleReactionFallback(part: String, type: String, intensity: GestureIntensity) {
-        triggerHaptic(type: "medium")
-        handleReaction(part: part, type: type, intensity: intensity)
     }
     
     // MARK: - Detection Helpers

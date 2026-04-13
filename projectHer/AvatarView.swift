@@ -25,8 +25,12 @@ struct AvatarView: View {
 
     // Customization State
     @ObservedObject var wardrobe = WardrobeManager.shared
-    @AppStorage("avatarWeather") private var selectedWeather = "clear"
+    // Default is "auto" for new installs; existing users keep their stored preference.
+    @AppStorage("avatarWeather") private var selectedWeather = "auto"
     @State private var windStrength: Double = 0.0
+
+    // WeatherKit — drives weather and wind when "auto" is selected
+    @StateObject private var weatherKit = WeatherKitManager.shared
 
     // Voice Settings (for touch dialogue TTS)
     @AppStorage("selectedVoiceId") private var selectedVoiceId: String = ""
@@ -34,6 +38,7 @@ struct AvatarView: View {
     @AppStorage("voiceRate") private var voiceRate: Double = 0.5
 
     let weatherOptions: [(String, String)] = [
+        ("Auto", "auto"),
         ("Clear", "clear"),
         ("Rain", "rain"),
         ("Snow", "snow"),
@@ -88,8 +93,8 @@ struct AvatarView: View {
             syncWardrobe()
             updateWeather(selectedWeather)
 
-            // 🆕 Start automatic wind sync from server
-            startWindSync()
+            // Start WeatherKit for location-based weather and wind
+            weatherKit.start()
 
             // Connect touch dialogue TTS callback
             scene.onSpeakDialogue = { [self] text, emotion in
@@ -123,77 +128,47 @@ struct AvatarView: View {
             }
         }
         .onDisappear {
-            windSyncTimer?.invalidate()
+            weatherKit.stop()
             // Note: Don't end call on disappear - that's the point of background calls!
             // Call ends only when user explicitly ends it
         }
-    }
-
-    // 🆕 Wind Sync Timer
-    @State private var windSyncTimer: Timer?
-
-    /// Start timer to sync wind from server
-    func startWindSync() {
-        windSyncTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-            Task {
-                await syncWindFromServer()
-            }
-        }
-        // Initial sync
-        Task { await syncWindFromServer() }
-    }
-
-    /// Fetch wind from server and apply appropriate hair variation
-    func syncWindFromServer() async {
-        do {
-            let windResponse = try await NetworkManager.shared.getWindState()
-            await MainActor.run {
-                applyWindVariation(speed: windResponse.speed, isOutdoor: windResponse.is_outdoor)
-            }
-        } catch {
-            print("⚠️ Wind sync failed: \(error)")
+        .onReceive(weatherKit.$environment) { env in
+            guard selectedWeather == "auto" else { return }
+            applyWeatherEnvironment(env)
         }
     }
 
-    /// Apply wind animation based on current outfit accessory (hat type)
-    /// Wind variations A-F are based on hat, not speed:
-    /// - A/B (Var1/2): No hat - normal hair
-    /// - C (Var3): hat_1
-    /// - D (Var4): winter_hat_motion_wind
-    /// - E/F (Var5/6): winter_hat
-    func applyWindVariation(speed: Float, isOutdoor: Bool) {
-        // Indoor or no wind = stop animation
-        if !isOutdoor || speed < 0.1 {
+    // MARK: - Weather Environment Application
+
+    /// Applies a WeatherEnvironment (from WeatherKit) to the avatar scene.
+    func applyWeatherEnvironment(_ env: WeatherEnvironment) {
+        scene.weather.disableAll()
+        env.effects.forEach { scene.weather.enable($0) }
+
+        windStrength = Double(env.windDX)
+        scene.weather.setWind(dx: env.windDX)
+        applyWindAnimation(dx: env.windDX)
+
+        let hour: CGFloat = env.isDaytime ? 12 : 22
+        scene.lighting?.update(timeOfDay: hour)
+    }
+
+    /// Selects the appropriate hair-wind animation based on wind strength and current accessory.
+    func applyWindAnimation(dx: CGFloat) {
+        let speed = Float(abs(dx) / 200.0)
+        if speed < 0.1 {
             scene.stopWind()
-            windStrength = 0
             return
         }
 
-        // Update slider to reflect wind strength
-        windStrength = Double(speed * 200)
-        scene.weather.setWind(dx: CGFloat(windStrength))
-
-        // Select wind variation based on current accessory (hat type)
         let currentAccessory = wardrobe.currentOutfit.accessories.first?.id ?? "none"
-
         switch currentAccessory {
         case let id where id.contains("winter_hat"):
-            // Winter hat - use Var5 or Var6 based on stronger wind
-            if speed > 0.5 {
-                scene.startWindVar4()  // motion wind
-            } else {
-                scene.startWindVar5()  // static winter hat
-            }
+            if speed > 0.5 { scene.startWindVar4() } else { scene.startWindVar5() }
         case let id where id.contains("hat"):
-            // Regular hat - use Var3
             scene.startWindVar3()
         default:
-            // No hat - use Var1 (strong) or Var2 (lighter)
-            if speed > 0.5 {
-                scene.startWindVar1()
-            } else {
-                scene.startWindVar2()
-            }
+            if speed > 0.5 { scene.startWindVar1() } else { scene.startWindVar2() }
         }
     }
 
@@ -390,9 +365,17 @@ struct AvatarView: View {
     }
 
     func updateWeather(_ type: String) {
-        // Reset
+        if type == "auto" {
+            // Apply current WeatherKit state (also handled reactively via .onReceive)
+            applyWeatherEnvironment(weatherKit.environment)
+            return
+        }
+
+        // Manual override
         scene.weather.disableAll()
         scene.lighting?.update(timeOfDay: 12)  // Default day
+        windStrength = 0
+        scene.stopWind()
 
         switch type {
         case "rain":

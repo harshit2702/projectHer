@@ -49,5 +49,7 @@
 	<string>Pandu can reference your upcoming events to be more helpful in conversations.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Pandu can see your reminders to help you stay organized.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Pandu uses your location to show real-time weather in the avatar scene.</string>
 </dict>
 </plist>

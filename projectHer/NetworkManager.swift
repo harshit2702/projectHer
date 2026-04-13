@@ -7,37 +7,8 @@ struct OutfitSyncResponse: Decodable {
     let reason: String?
 }
 
-// Legacy response (kept for backwards compatibility)
-struct InteractionResponseLegacy: Decodable {
-    let status: String
-    let bonding_score: Double
-    let hair_state: String?
-}
-
-/// New context-aware touch response from server
-struct TouchReactionResponse: Decodable {
-    let status: String
-    let outcome: String                    // "positive", "neutral", "negative"
-    let reaction_id: String                // Animation to play
-    let bonding_delta: Double              // Change in bonding
-    let bonding_score: Double              // Updated total
-    let dialogue: String?                  // Text to show/speak
-    let dialogue_mode: String              // "silent" or "speak"
-    let dialogue_emotion: String?          // For TTS tone
-    let spawn_hearts: Bool
-    let hair_state: String
-    let memory_note: String?
-    
-    /// Convenience for backwards compatibility
-    var hair_state_optional: String? { hair_state }
-}
-
-struct WindResponse: Decodable {
-    let speed: Float
-    let direction: [Float]
-    let gustiness: Float
-    let is_outdoor: Bool
-    let location: String?
+struct MemoryRelevanceResponse: Decodable {
+    let relevant_ids: [String]
 }
 
 class NetworkManager {
@@ -63,20 +34,6 @@ class NetworkManager {
         return try await sendPostRequest(to: endpoint, body: payload, responseType: OutfitSyncResponse.self)
     }
     
-    // MARK: - Interaction Sync (New Context-Aware)
-    func recordInteraction(part: String, gesture: String, intensity: Int, isTalking: Bool = false) async throws -> TouchReactionResponse {
-        let endpoint = "\(baseURL)/state/interaction"
-        let payload: [String: Any] = [
-            "part": part,
-            "gesture": gesture,
-            "intensity": intensity,
-            "is_talking": isTalking,
-            "timestamp": Date().timeIntervalSince1970
-        ]
-        
-        return try await sendPostRequest(to: endpoint, body: payload, responseType: TouchReactionResponse.self)
-    }
-    
     // MARK: - Call Sync
     func updateCallState(event: String, type: String, duration: TimeInterval = 0) async throws {
         let endpoint = "\(baseURL)/state/call"
@@ -90,10 +47,13 @@ class NetworkManager {
         _ = try await sendPostRequest(to: endpoint, body: payload, responseType: [String: String].self)
     }
     
-    // MARK: - Wind Sync
-    func getWindState() async throws -> WindResponse {
-        let endpoint = "\(baseURL)/state/wind"
-        return try await sendGetRequest(to: endpoint, responseType: WindResponse.self)
+    // MARK: - Memory Relevance
+    /// Returns the subset of memory IDs the backend considers still relevant.
+    /// Memories whose IDs are absent from the response should be hidden.
+    func filterMemoriesByRelevance(ids: [String]) async throws -> MemoryRelevanceResponse {
+        let endpoint = "\(baseURL)/memories/relevance"
+        let payload: [String: Any] = ["ids": ids]
+        return try await sendPostRequest(to: endpoint, body: payload, responseType: MemoryRelevanceResponse.self)
     }
     
     // MARK: - Helpers
@@ -112,7 +72,6 @@ class NetworkManager {
         let (data, response) = try await URLSession.shared.data(for: request)
         
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            // Try to decode error response if possible, mostly for outfit rejection logic if it returns non-200 (though server code returns 200 with status="rejected" usually, but just in case)
              if let errorResponse = try? JSONDecoder().decode(T.self, from: data) {
                 return errorResponse
             }
