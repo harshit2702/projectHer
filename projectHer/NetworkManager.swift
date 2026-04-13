@@ -7,10 +7,6 @@ struct OutfitSyncResponse: Decodable {
     let reason: String?
 }
 
-struct MemoryRelevanceResponse: Decodable {
-    let relevant_ids: [String]
-}
-
 class NetworkManager {
     static let shared = NetworkManager()
     
@@ -45,15 +41,6 @@ class NetworkManager {
         ]
         
         _ = try await sendPostRequest(to: endpoint, body: payload, responseType: [String: String].self)
-    }
-    
-    // MARK: - Memory Relevance
-    /// Returns the subset of memory IDs the backend considers still relevant.
-    /// Memories whose IDs are absent from the response should be hidden.
-    func filterMemoriesByRelevance(ids: [String]) async throws -> MemoryRelevanceResponse {
-        let endpoint = "\(baseURL)/memories/relevance"
-        let payload: [String: Any] = ["ids": ids]
-        return try await sendPostRequest(to: endpoint, body: payload, responseType: MemoryRelevanceResponse.self)
     }
     
     // MARK: - Helpers
