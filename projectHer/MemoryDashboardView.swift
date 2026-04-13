@@ -6,17 +6,6 @@ struct MemoryDashboardView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
 
-    private enum RelevanceState { case checking, loaded(Set<String>), failed }
-    @State private var relevanceState: RelevanceState = .checking
-
-    /// Memories filtered by backend relevance check (show all while checking or on failure)
-    private var displayedMemories: [MemoryItem] {
-        if case .loaded(let ids) = relevanceState {
-            return memories.filter { ids.contains($0.id) }
-        }
-        return memories
-    }
-
     var body: some View {
         NavigationView {
             VStack {
@@ -55,19 +44,12 @@ struct MemoryDashboardView: View {
                     }
                     
                     // Memory List
-                    if displayedMemories.isEmpty {
-                        VStack(spacing: 8) {
-                            if case .checking = relevanceState, !memories.isEmpty {
-                                ProgressView("Checking relevance...")
-                                    .padding(.top)
-                            } else {
-                                Text("No relevant memories found.")
-                                    .foregroundColor(.gray)
-                                    .padding()
-                            }
-                        }
+                    if memories.isEmpty {
+                        Text("No memories found.")
+                            .foregroundColor(.gray)
+                            .padding()
                     } else {
-                        List(displayedMemories) { memory in
+                        List(memories) { memory in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(memory.text)
                                     .font(.body)
@@ -104,7 +86,6 @@ struct MemoryDashboardView: View {
     func loadMemories() {
         self.isLoading = true
         self.errorMessage = nil
-        self.relevanceState = .checking
         
         guard let url = URL(string: "\(AppConfig.serverURL)/memories/dashboard?limit=50") else {
             self.isLoading = false
@@ -132,8 +113,6 @@ struct MemoryDashboardView: View {
                 do {
                     let response = try JSONDecoder().decode(MemoryDashboardResponse.self, from: data)
                     self.memories = response.items
-                    // Check relevance for all loaded memories
-                    self.checkRelevance(for: response.items)
                 } catch {
                     print("Decoding error: \(error)")
                     self.errorMessage = "Failed to process data"
@@ -145,30 +124,6 @@ struct MemoryDashboardView: View {
         loadStats()
     }
 
-    /// Asks the backend which memories are still relevant; filters the displayed list.
-    func checkRelevance(for items: [MemoryItem]) {
-        let ids = items.map { $0.id }
-        guard !ids.isEmpty else {
-            self.relevanceState = .loaded([])
-            return
-        }
-
-        Task {
-            do {
-                let response = try await NetworkManager.shared.filterMemoriesByRelevance(ids: ids)
-                await MainActor.run {
-                    self.relevanceState = .loaded(Set(response.relevant_ids))
-                }
-            } catch {
-                print("⚠️ Relevance check failed: \(error.localizedDescription)")
-                // On failure, show all memories so nothing is hidden unexpectedly
-                await MainActor.run {
-                    self.relevanceState = .failed
-                }
-            }
-        }
-    }
-    
     func loadStats() {
         guard let url = URL(string: "\(AppConfig.serverURL)/stats") else { return }
         
