@@ -3,12 +3,16 @@ import SwiftUI
 
 struct AvatarView: View {
     @Environment(\.dismiss) var dismiss
+    @Environment(\.scenePhase) var scenePhase  // 🆕 For PiP on background
     @ObservedObject var tts: TTSManager
     @ObservedObject var stt: LiveSTT
     @Binding var voiceMode: Bool
     
     // 🆕 Background Call Service for call continuation
     @StateObject private var callService = BackgroundCallService.shared
+    
+    // 🆕 PiP Manager for picture-in-picture with animated mouth
+    @StateObject private var pipManager = PiPManager.shared
 
     // Scene (Held as a State object)
     @State private var scene: AvatarScene = {
@@ -100,11 +104,15 @@ struct AvatarView: View {
             
             // 🆕 Start background call on appear (makes call continue when minimized)
             Task {
-                try? await callService.startCall()
+                // Sync outfit BEFORE starting call so Live Activity shows correct avatar
+                callService.currentOutfitId = wardrobe.currentOutfit.base.id
+                try? await callService.startCall(isVideo: true)  // Video call
             }
         }
-        .onChange(of: wardrobe.currentOutfit.base.id) { _, _ in
+        .onChange(of: wardrobe.currentOutfit.base.id) { _, newOutfit in
             syncWardrobe()
+            // Keep Live Activity in sync with outfit changes
+            callService.currentOutfitId = newOutfit
         }
         .onChange(of: wardrobe.currentOutfit.accessories.map { $0.id }) { _, _ in
             syncWardrobe()
@@ -120,6 +128,18 @@ struct AvatarView: View {
                 scene.startTalkNatural()
             } else {
                 scene.stopTalk()
+            }
+            // 🆕 Sync TTS state to PiP for mouth animation
+            pipManager.setTalking(speaking)
+        }
+        // 🆕 Auto-start PiP when app goes to background during call
+        .onChange(of: scenePhase) { _, phase in
+            // Must start PiP in inactive state (just before background)
+            if phase == .inactive && callService.isCallActive {
+                pipManager.setOutfit(wardrobe.currentOutfit.base.id)
+                pipManager.startPiP()
+            } else if phase == .active {
+                pipManager.stopPiP()
             }
         }
         .onDisappear {
@@ -257,12 +277,14 @@ struct AvatarView: View {
                         .clipShape(Circle())
                 }
                 
-                // 🆕 Minimize button - keep call running in background
+                // 🆕 Minimize button - keep call running in background with PiP
                 Button(action: {
-                    // Dismiss view but keep call active
+                    // Start PiP with current outfit, then dismiss
+                    pipManager.setOutfit(wardrobe.currentOutfit.base.id)
+                    pipManager.startPiP()
                     dismiss()
                 }) {
-                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    Image(systemName: "rectangle.inset.bottomright.filled")
                         .font(.title2)
                         .frame(width: 60, height: 60)
                         .background(Color.blue)

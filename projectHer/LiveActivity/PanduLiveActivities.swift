@@ -40,6 +40,22 @@ struct PanduSleepAttributes: ActivityAttributes {
     var wakeTimeDisplay: String
 }
 
+// MARK: - Call Activity
+
+/// Attributes for active video/voice calls with Pandu
+struct PanduCallAttributes: ActivityAttributes {
+    public struct ContentState: Codable, Hashable {
+        var callDuration: Int  // seconds
+        var isMuted: Bool
+        var isSpeaking: Bool
+    }
+    
+    var isVideoCall: Bool
+    var callerName: String
+    var outfitId: String  // Current outfit for avatar thumbnail
+    var startTimestamp: TimeInterval
+}
+
 // MARK: - Live Activity Manager
 
 @available(iOS 16.1, *)
@@ -48,10 +64,107 @@ class PanduLiveActivityManager: ObservableObject {
     
     @Published var currentTransitActivity: Activity<PanduTransitAttributes>?
     @Published var currentSleepActivity: Activity<PanduSleepAttributes>?
+    @Published var currentCallActivity: Activity<PanduCallAttributes>?
     
     private var updateTimer: Timer?
+    private var callTimer: Timer?
+    private var callStartTime: Date?
     
     private init() {}
+    
+    // MARK: - Call Activity
+    
+    func startCallActivity(isVideo: Bool, outfitId: String) {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("📞 Live Activities not enabled")
+            return
+        }
+        
+        // End any existing call activity first
+        if currentCallActivity != nil {
+            endCallActivity()
+        }
+        
+        let now = Date()
+        callStartTime = now
+        
+        let attributes = PanduCallAttributes(
+            isVideoCall: isVideo,
+            callerName: "Pandu",
+            outfitId: outfitId,
+            startTimestamp: now.timeIntervalSince1970
+        )
+        
+        let initialState = PanduCallAttributes.ContentState(
+            callDuration: 0,
+            isMuted: false,
+            isSpeaking: false
+        )
+        
+        do {
+            let content = ActivityContent(state: initialState, staleDate: nil)
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: content,
+                pushType: nil
+            )
+            currentCallActivity = activity
+            startCallTimer()
+            print("📞 Call Live Activity started (video: \(isVideo))")
+        } catch {
+            print("❌ Failed to start call activity: \(error)")
+        }
+    }
+    
+    func updateCallActivity(isMuted: Bool, isSpeaking: Bool) {
+        guard let activity = currentCallActivity,
+              let start = callStartTime else { return }
+        
+        let duration = Int(Date().timeIntervalSince(start))
+        
+        let newState = PanduCallAttributes.ContentState(
+            callDuration: duration,
+            isMuted: isMuted,
+            isSpeaking: isSpeaking
+        )
+        
+        Task {
+            let content = ActivityContent(state: newState, staleDate: nil)
+            await activity.update(content)
+        }
+    }
+    
+    func endCallActivity() {
+        guard let activity = currentCallActivity else { return }
+        
+        let finalState = PanduCallAttributes.ContentState(
+            callDuration: 0,
+            isMuted: false,
+            isSpeaking: false
+        )
+        
+        Task {
+            let content = ActivityContent(state: finalState, staleDate: nil)
+            await activity.end(content, dismissalPolicy: .immediate)
+            await MainActor.run {
+                currentCallActivity = nil
+                callStartTime = nil
+            }
+        }
+        
+        callTimer?.invalidate()
+        callTimer = nil
+        print("📞 Call Live Activity ended")
+    }
+    
+    private func startCallTimer() {
+        callTimer?.invalidate()
+        
+        // Update every second for call duration
+        callTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updateCallActivity(isMuted: false, isSpeaking: false)
+        }
+    }
     
     // MARK: - Transit Activity
     

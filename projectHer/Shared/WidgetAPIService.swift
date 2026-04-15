@@ -153,6 +153,19 @@ struct LiveActivityData: Codable {
     }
 }
 
+/// Calendar sync response
+struct CalendarSyncResponse: Codable {
+    let status: String?
+    let eventsStored: Int?
+    let message: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case status
+        case eventsStored = "events_stored"
+        case message
+    }
+}
+
 // MARK: - Widget API Service
 
 class WidgetAPIService {
@@ -225,8 +238,9 @@ class WidgetAPIService {
     // MARK: - Calendar Sync
     
     /// Sync calendar events to server
+    /// Sync calendar events to server
     func syncCalendarEvents(_ events: [[String: Any]]) async throws {
-        let _: [String: String] = try await post("/calendar/sync", body: ["events": events])
+        let _: CalendarSyncResponse = try await post("/calendar/sync", body: ["events": events])
     }
     
     // MARK: - Private Helpers

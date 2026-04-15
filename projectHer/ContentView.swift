@@ -229,6 +229,8 @@ struct ContentView: View {
                                     voiceMode = true
                                     try await stt.requestPermissions()
                                     try stt.start()
+                                    // 🆕 Start CallKit call for voice mode (appears in Phone Recents)
+                                    try? await BackgroundCallService.shared.startCall(isVideo: false)
                                 } catch {
                                     voiceMode = false
                                 }
@@ -247,6 +249,10 @@ struct ContentView: View {
                         onCancelVoice: {
                             stt.stop()
                             voiceMode = false
+                            // 🆕 End CallKit call when voice mode is cancelled
+                            Task {
+                                await BackgroundCallService.shared.endCall()
+                            }
                         }
                     )
                     

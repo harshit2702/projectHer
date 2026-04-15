@@ -10,8 +10,12 @@ struct ProjectHerApp: App {
     // 1. Create the Database Container
     let sharedModelContainer: ModelContainer
     
-    // 🆕 Deep link action to trigger new chat
+    // Deep link action to trigger new chat
     @State private var pendingDeepLinkAction: DeepLinkAction?
+    
+    // 🆕 Call from Phone Recents - auto-opens call view
+    @State private var showCallFromRecents = false
+    @State private var isVideoCallFromRecents = true
     
     enum DeepLinkAction: Equatable {
         case openNewChat
@@ -19,6 +23,10 @@ struct ProjectHerApp: App {
     }
     
     init() {
+        // Must set callback BEFORE anything else - CallKit can call at any time
+        // Use a static to bridge from init to SwiftUI state
+        Self.setupCallRecentsCallback()
+        
         do {
             sharedModelContainer = try ModelContainer(for: ChatMessage.self, ChatSession.self)
             
@@ -34,6 +42,20 @@ struct ProjectHerApp: App {
             
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
+        }
+    }
+    
+    // Static callback registration - must be done before CallKit can fire
+    private static func setupCallRecentsCallback() {
+        print("📞 Setting up Phone Recents callback")
+        BackgroundCallService.shared.onCallFromRecents = { isVideo in
+            print("📞 CALLBACK FIRED: Call from Phone Recents (isVideo: \(isVideo))")
+            // Post notification that can be observed by SwiftUI
+            NotificationCenter.default.post(
+                name: NSNotification.Name("CallFromRecents"),
+                object: nil,
+                userInfo: ["isVideo": isVideo]
+            )
         }
     }
     
@@ -58,6 +80,19 @@ struct ProjectHerApp: App {
                 .onOpenURL { url in
                     print("📱 App opened via URL: \(url)")
                     handleDeepLink(url)
+                }
+                // Listen for call from Phone Recents notification
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CallFromRecents"))) { notification in
+                    print("📞 NOTIFICATION RECEIVED: CallFromRecents")
+                    if let isVideo = notification.userInfo?["isVideo"] as? Bool {
+                        print("📞 Opening call view (isVideo: \(isVideo))")
+                        isVideoCallFromRecents = isVideo
+                        showCallFromRecents = true
+                    }
+                }
+                // Auto-present call when tapping from Phone Recents
+                .fullScreenCover(isPresented: $showCallFromRecents) {
+                    RecentsCallWrapper(isVideo: isVideoCallFromRecents)
                 }
         }
         // 3. Inject Database into View Hierarchy
@@ -171,5 +206,28 @@ struct ProjectHerApp: App {
         } catch {
             print("Widget check failed: \(error)")
         }
+    }
+}
+
+// MARK: - Recents Call Wrapper
+
+/// Wrapper for handling calls initiated from Phone app Recents
+/// Automatically presents AvatarView (video) or starts voice mode
+struct RecentsCallWrapper: View {
+    let isVideo: Bool
+    
+    @StateObject private var tts = TTSManager()
+    @StateObject private var stt = LiveSTT(localeId: "en-IN")
+    @State private var voiceMode = true
+    
+    var body: some View {
+        AvatarView(tts: tts, stt: stt, voiceMode: $voiceMode)
+            .onAppear {
+                print("📞 Starting call from Phone Recents (video: \(isVideo))")
+                Task {
+                    try? await stt.requestPermissions()
+                    try? stt.start()
+                }
+            }
     }
 }

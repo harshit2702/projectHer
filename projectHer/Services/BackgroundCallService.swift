@@ -23,11 +23,16 @@ class BackgroundCallService: NSObject, ObservableObject {
     @Published var callDuration: TimeInterval = 0
     @Published var isMuted = false
     @Published var isSpeakerOn = true
+    @Published var isVideoCall = false  // 🆕 Distinguish voice vs video
+    
+    // Current outfit for Live Activity thumbnail
+    var currentOutfitId: String = "avatar_outfit_hoodie_black"
     
     // CallKit Components
     private let callController = CXCallController()
     private var provider: CXProvider?
     private var currentCallUUID: UUID?
+    private var pendingVideoCall = false  // Track if initiated as video call
     
     // Audio Session
     private var audioSession: AVAudioSession { AVAudioSession.sharedInstance() }
@@ -40,6 +45,7 @@ class BackgroundCallService: NSObject, ObservableObject {
     var onCallStarted: (() -> Void)?
     var onCallEnded: (() -> Void)?
     var onMuteChanged: ((Bool) -> Void)?
+    var onCallFromRecents: ((Bool) -> Void)?  // 🆕 Called when user taps from Phone Recents (isVideo)
     
     override init() {
         super.init()
@@ -71,7 +77,8 @@ class BackgroundCallService: NSObject, ObservableObject {
     // MARK: - Start Call
     
     /// Start a background call - allows voice to continue when app is backgrounded
-    func startCall() async throws {
+    /// - Parameter isVideo: true for video call, false for voice-only
+    func startCall(isVideo: Bool = true) async throws {
         guard !isCallActive else {
             print("📞 Call already active")
             return
@@ -83,17 +90,20 @@ class BackgroundCallService: NSObject, ObservableObject {
         // Create new call UUID
         let uuid = UUID()
         currentCallUUID = uuid
+        isVideoCall = isVideo
+        pendingVideoCall = isVideo
         
         // Report outgoing call to CallKit
-        let handle = CXHandle(type: .generic, value: "Pandu ❤️")
+        let callType = isVideo ? "Video Call" : "Voice Call"
+        let handle = CXHandle(type: .generic, value: "Pandu \(isVideo ? "📹" : "🎤")")
         let startCallAction = CXStartCallAction(call: uuid, handle: handle)
-        startCallAction.isVideo = false
+        startCallAction.isVideo = isVideo
         
         let transaction = CXTransaction(action: startCallAction)
         
         do {
             try await callController.request(transaction)
-            print("📞 CallKit: Call started")
+            print("📞 CallKit: \(callType) started")
             
             // Mark call as connected after a brief delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -127,6 +137,38 @@ class BackgroundCallService: NSObject, ObservableObject {
             handleCallEnded()
         }
     }
+    
+    // MARK: - Incoming Call (from VoIP Push)
+    
+    /// Report an incoming call from VoIP push notification
+    /// This MUST be called from within the PushKit push handler
+    func reportIncomingCall(callerName: String, callId: String) async {
+        let uuid: UUID
+        if let existingUUID = UUID(uuidString: callId) {
+            uuid = existingUUID
+        } else {
+            uuid = UUID()
+        }
+        
+        currentCallUUID = uuid
+        
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: callerName)
+        update.localizedCallerName = callerName
+        update.hasVideo = true  // Show video call UI
+        update.supportsHolding = false
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
+        update.supportsDTMF = false
+        
+        do {
+            try await provider?.reportNewIncomingCall(with: uuid, update: update)
+            print("📞 CallKit: Incoming call reported for \(callerName)")
+        } catch {
+            print("📞 CallKit: Failed to report incoming call: \(error)")
+        }
+    }
+
     
     // MARK: - Mute Control
     
@@ -194,6 +236,14 @@ class BackgroundCallService: NSObject, ObservableObject {
             }
         }
         
+        // 🆕 Start Live Activity for Dynamic Island
+        if #available(iOS 16.1, *) {
+            PanduLiveActivityManager.shared.startCallActivity(
+                isVideo: isVideoCall,
+                outfitId: currentOutfitId
+            )
+        }
+        
         onCallStarted?()
         print("📞 Call active - can now use phone normally while voice continues")
     }
@@ -206,6 +256,11 @@ class BackgroundCallService: NSObject, ObservableObject {
         
         durationTimer?.invalidate()
         durationTimer = nil
+        
+        // 🆕 End Live Activity
+        if #available(iOS 16.1, *) {
+            PanduLiveActivityManager.shared.endCallActivity()
+        }
         
         deactivateAudioSession()
         onCallEnded?()
@@ -234,7 +289,20 @@ extension BackgroundCallService: CXProviderDelegate {
     
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         Task { @MainActor in
-            print("📞 CallKit: CXStartCallAction")
+            // 🆕 Check if this is from Phone app Recents (not initiated by our app)
+            let isFromRecents = self.currentCallUUID == nil || self.currentCallUUID != action.callUUID
+            
+            if isFromRecents {
+                print("📞 CallKit: Call from Phone Recents (video: \(action.isVideo))")
+                self.currentCallUUID = action.callUUID
+                self.isVideoCall = action.isVideo
+                
+                // Notify app to present the call UI
+                self.onCallFromRecents?(action.isVideo)
+            } else {
+                print("📞 CallKit: CXStartCallAction")
+            }
+            
             do {
                 try self.configureAudioSession()
                 action.fulfill()

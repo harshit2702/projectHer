@@ -99,6 +99,20 @@ struct PanduSleepAttributes: ActivityAttributes {
     var wakeTimeDisplay: String
 }
 
+/// Call Live Activity Attributes - Video/Voice calls with avatar
+struct PanduCallAttributes: ActivityAttributes {
+    public struct ContentState: Codable, Hashable {
+        var callDuration: Int  // seconds
+        var isMuted: Bool
+        var isSpeaking: Bool
+    }
+    
+    var isVideoCall: Bool
+    var callerName: String
+    var outfitId: String  // Current outfit for avatar thumbnail
+    var startTimestamp: TimeInterval
+}
+
 // MARK: - Widget API Service
 
 class WidgetAPIService {
