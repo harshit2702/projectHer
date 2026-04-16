@@ -41,6 +41,7 @@ final class WeatherController {
         let baseline = emitter.userData?["baseBirthRate"] as? CGFloat ?? emitter.particleBirthRate
         emitter.particleBirthRate = baseline
         emitter.isHidden = false
+        applyWind(to: emitter, for: effect)
     }
 
     func disable(_ effect: Effect, lettingParticlesFinish: Bool = true) {
@@ -52,9 +53,9 @@ final class WeatherController {
         emitters.removeValue(forKey: effect)
     }
     
-    func disableAll() {
+    func disableAll(lettingParticlesFinish: Bool = true) {
         for effect in emitters.keys {
-            disable(effect)
+            disable(effect, lettingParticlesFinish: lettingParticlesFinish)
         }
     }
     
@@ -62,9 +63,7 @@ final class WeatherController {
         self.windDX = dx
         // Update active emitters that react to wind
         for (effect, emitter) in emitters {
-            if effect == .snowBackground || effect == .snowForeground || effect == .rain || effect == .leaves || effect == .fog {
-                emitter.xAcceleration = dx
-            }
+            applyWind(to: emitter, for: effect)
         }
     }
 
@@ -98,6 +97,7 @@ final class WeatherController {
             configureLeavesEmitter(emitter, scene: scene)
         }
         emitter.userData = ["baseBirthRate": emitter.particleBirthRate as NSNumber]
+        applyWind(to: emitter, for: effect)
         return emitter
     }
 
@@ -196,5 +196,19 @@ final class WeatherController {
     
     private static func makeLeafFlutterAction() -> SKAction {
         return SKAction.repeatForever(SKAction.rotate(byAngle: .pi, duration: 2))
+    }
+
+    private func applyWind(to emitter: SKEmitterNode, for effect: Effect) {
+        guard isWindReactive(effect) else {
+            emitter.xAcceleration = 0
+            return
+        }
+
+        let fogDrift: CGFloat = effect == .fog ? 2 : 0
+        emitter.xAcceleration = windDX + fogDrift
+    }
+
+    private func isWindReactive(_ effect: Effect) -> Bool {
+        effect == .snowBackground || effect == .snowForeground || effect == .rain || effect == .fog || effect == .leaves
     }
 }

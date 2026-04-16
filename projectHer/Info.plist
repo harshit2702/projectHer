@@ -22,6 +22,8 @@
 	<string>We need access to your microphone for voice interaction.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>We use speech recognition to transcribe your voice commands.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Pandu uses your location to match weather, wind, and scene background to your local environment.</string>
 	<key>CFBundleDisplayName</key>
 	<string>Pandu</string>
 	<key>CFBundleSpokenName</key>

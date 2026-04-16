@@ -126,61 +126,50 @@ extension AvatarScene {
     func triggerGesture(part: String, type: String, intensity: GestureIntensity = .moderate) {
         print("✨ Gesture: \(type) on \(part) [\(intensity.rawValue)]")
         
-        // Get the base gesture type for server (Pull Left/Right/Up/Down -> Pull)
+        // Canonical gesture used by semantic engine (Pull Left/Right/Up/Down -> Pull)
         let baseGesture = type.hasPrefix("Pull") ? "Pull" : type
-        
-        // Send to Server for context-aware reaction
-        Task {
-            do {
-                let response = try await NetworkManager.shared.recordInteraction(
-                    part: part,
-                    gesture: baseGesture,
-                    intensity: intensity.rawValue,
-                    isTalking: self.isTalking
-                )
-                
-                await MainActor.run {
-                    // 1. Play the server-determined reaction animation
-                    self.playReaction(reactionId: response.reaction_id, spawnHearts: response.spawn_hearts)
-                    
-                    // 2. Update hair state
-                    let assetName = (response.hair_state == "hair_neat") ? "hair" : response.hair_state
-                    self.hairBase?.texture = SKTexture(imageNamed: assetName)
-                    
-                    // 3. Show dialogue (silent mode = floating text, speak mode = TTS)
-                    if let dialogue = response.dialogue {
-                        self.showTouchDialogue(
-                            text: dialogue,
-                            mode: response.dialogue_mode,
-                            emotion: response.dialogue_emotion ?? "neutral"
-                        )
-                    }
-                    
-                    // 4. Trigger haptic based on outcome
-                    switch response.outcome {
-                    case "positive":
-                        self.triggerHaptic(type: "success")
-                    case "negative":
-                        self.triggerHaptic(type: "warning")
-                    default:
-                        self.triggerHaptic(type: "light")
-                    }
-                    
-                    print("🎭 Reaction: \(response.reaction_id) [\(response.outcome)] | Bonding: \(response.bonding_score)")
-                }
-                
-            } catch {
-                print("❌ Failed to record interaction: \(error)")
-                // Fallback to local reaction if server fails
-                await MainActor.run {
-                    self.handleReactionFallback(part: part, type: type, intensity: intensity)
-                }
-            }
+
+        if let interaction = TouchReactionEngine.makeInteraction(
+            partName: part,
+            gestureName: baseGesture,
+            intensity: intensity.rawValue
+        ) {
+            print(interaction.toModelContext())
         }
+
+        let reaction = TouchReactionEngine.resolve(
+            partName: part,
+            gestureName: baseGesture,
+            intensity: intensity.rawValue,
+            isTalking: isTalking
+        )
+
+        playReaction(reactionId: reaction.reactionId, spawnHearts: reaction.spawnHearts)
+
+        if let hairAsset = reaction.hairAssetName {
+            hairBase?.texture = SKTexture(imageNamed: hairAsset)
+        }
+
+        if let dialogue = reaction.dialogue {
+            showTouchDialogue(
+                text: dialogue,
+                mode: reaction.dialogueMode.rawValue,
+                emotion: reaction.dialogueEmotion
+            )
+        }
+
+        switch reaction.outcome {
+        case .positive:
+            triggerHaptic(type: "success")
+        case .negative:
+            triggerHaptic(type: "warning")
+        case .neutral:
+            triggerHaptic(type: "light")
+        }
+
+        print("🎭 Local reaction: \(reaction.reactionId) [\(reaction.outcome.rawValue)]")
         
         onGestureDetected?(part, type)
-        // Note: Reaction is now handled by server response, not locally
-        // handleReaction is only used as fallback when server is unreachable
     }
     
     // MARK: - Dialogue Display
@@ -234,14 +223,6 @@ extension AvatarScene {
         ])
         
         label.run(sequence)
-    }
-    
-    // MARK: - Fallback Reaction (when server unreachable)
-    
-    /// Local fallback reactions when server is unavailable
-    func handleReactionFallback(part: String, type: String, intensity: GestureIntensity) {
-        triggerHaptic(type: "medium")
-        handleReaction(part: part, type: type, intensity: intensity)
     }
     
     // MARK: - Detection Helpers

@@ -83,6 +83,8 @@ struct ContentView: View {
     // ⚠️ Configuration moved to AppConfig.swift
     let serverURL = AppConfig.serverURL
     let apiKey = AppConfig.apiKey
+    private let maxChatDeliveryAttempts = 3
+    private let baseChatRetryDelay: Double = 1.5
 
     var body: some View {
         GeometryReader { geometry in
@@ -590,11 +592,18 @@ struct ContentView: View {
         let messageText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !messageText.isEmpty else { return }
 
+        let clientMessageId = UUID().uuidString
+
         // 1. Update Emotion Engine
         EmotionEngine.shared.processUserMessage(messageText)
 
         // Create message with session relationship
-        let userMsg = ChatMessage(text: messageText, isUser: true, session: session)
+        let userMsg = ChatMessage(
+            text: messageText,
+            isUser: true,
+            session: session,
+            clientMessageId: clientMessageId
+        )
         userMsg.status = .sending
         modelContext.insert(userMsg)
 
@@ -610,10 +619,30 @@ struct ContentView: View {
             HistoryItem(role: $0.isUser ? "user" : "assistant", content: $0.text)
         }
 
+        sendChatRequest(
+            session: session,
+            userMsg: userMsg,
+            messageText: messageText,
+            historyItems: historyItems,
+            clientMessageId: clientMessageId,
+            attempt: 1
+        )
+    }
+
+    private func sendChatRequest(
+        session: ChatSession,
+        userMsg: ChatMessage,
+        messageText: String,
+        historyItems: [HistoryItem],
+        clientMessageId: String,
+        attempt: Int
+    ) {
         guard let url = URL(string: "\(serverURL)/chat") else {
-            userMsg.status = .failed
-            connectionStatus = .disconnected
-            isTyping = false
+            finalizeChatFailure(
+                userMsg: userMsg,
+                connection: .disconnected,
+                reason: "invalid chat URL"
+            )
             return
         }
 
@@ -621,12 +650,13 @@ struct ContentView: View {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 120
+        request.timeoutInterval = 35
 
         let payload = ChatRequest(
             message: messageText,
             history: historyItems,
             context_chain_id: session.contextChainId,
+            client_message_id: clientMessageId,
             mood: EmotionEngine.shared.getCurrentMood(),
             tone_instruction: EmotionEngine.shared.getToneInstruction()
         )
@@ -634,60 +664,138 @@ struct ContentView: View {
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
-                isTyping = false
-
-                // Network error
                 if let error = error {
-                    userMsg.status = .failed
-                    connectionStatus = .disconnected
-                    print("❌ Network error: \(error.localizedDescription)")
+                    self.scheduleChatRetryOrFail(
+                        session: session,
+                        userMsg: userMsg,
+                        messageText: messageText,
+                        historyItems: historyItems,
+                        clientMessageId: clientMessageId,
+                        attempt: attempt,
+                        reason: "network error: \(error.localizedDescription)",
+                        fallbackConnection: .disconnected,
+                        retryDelay: nil
+                    )
                     return
                 }
 
-                // HTTP status check
                 if let httpResponse = response as? HTTPURLResponse {
                     switch httpResponse.statusCode {
                     case 200...299:
-                        connectionStatus = .connected
+                        break
                     case 403:
-                        userMsg.status = .failed
-                        connectionStatus = .authError
+                        self.finalizeChatFailure(
+                            userMsg: userMsg,
+                            connection: .authError,
+                            reason: "authentication failed"
+                        )
                         return
                     case 500...599:
-                        userMsg.status = .failed
-                        connectionStatus = .serverError
+                        self.scheduleChatRetryOrFail(
+                            session: session,
+                            userMsg: userMsg,
+                            messageText: messageText,
+                            historyItems: historyItems,
+                            clientMessageId: clientMessageId,
+                            attempt: attempt,
+                            reason: "server error \(httpResponse.statusCode)",
+                            fallbackConnection: .serverError,
+                            retryDelay: nil
+                        )
                         return
                     default:
-                        userMsg.status = .failed
-                        connectionStatus = .disconnected
+                        self.scheduleChatRetryOrFail(
+                            session: session,
+                            userMsg: userMsg,
+                            messageText: messageText,
+                            historyItems: historyItems,
+                            clientMessageId: clientMessageId,
+                            attempt: attempt,
+                            reason: "unexpected status \(httpResponse.statusCode)",
+                            fallbackConnection: .disconnected,
+                            retryDelay: nil
+                        )
                         return
                     }
                 }
 
-                // Parse response
-                if let data = data,
-                    let response = try? JSONDecoder().decode(ServerResponse.self, from: data)
-                {
-                    userMsg.status = .sent
+                guard let data,
+                    let serverResponse = try? JSONDecoder().decode(ServerResponse.self, from: data)
+                else {
+                    self.scheduleChatRetryOrFail(
+                        session: session,
+                        userMsg: userMsg,
+                        messageText: messageText,
+                        historyItems: historyItems,
+                        clientMessageId: clientMessageId,
+                        attempt: attempt,
+                        reason: "failed to parse server response",
+                        fallbackConnection: .serverError,
+                        retryDelay: nil
+                    )
+                    return
+                }
 
-                    // Create AI reply with session relationship
+                let status = (serverResponse.status ?? "success").lowercased()
+                if status == "processing" {
+                    self.scheduleChatRetryOrFail(
+                        session: session,
+                        userMsg: userMsg,
+                        messageText: messageText,
+                        historyItems: historyItems,
+                        clientMessageId: clientMessageId,
+                        attempt: attempt,
+                        reason: "server still processing",
+                        fallbackConnection: .serverError,
+                        retryDelay: Double(max(1, serverResponse.retry_after_seconds ?? 2))
+                    )
+                    return
+                }
+
+                guard status == "success" else {
+                    self.scheduleChatRetryOrFail(
+                        session: session,
+                        userMsg: userMsg,
+                        messageText: messageText,
+                        historyItems: historyItems,
+                        clientMessageId: clientMessageId,
+                        attempt: attempt,
+                        reason: "server returned \(status)",
+                        fallbackConnection: .serverError,
+                        retryDelay: nil
+                    )
+                    return
+                }
+
+                self.isTyping = false
+                self.connectionStatus = .connected
+                userMsg.status = .sent
+
+                let effectiveClientMessageId = serverResponse.client_message_id ?? clientMessageId
+                let hasExistingReply = session.messages.contains {
+                    !$0.isUser && $0.clientMessageId == effectiveClientMessageId
+                }
+
+                if !hasExistingReply {
+                    let didUseMemory = serverResponse.context_used
+                        && (serverResponse.memory_items_used ?? 0) > 0
+
                     let reply = ChatMessage(
-                        text: response.reply,
+                        text: serverResponse.reply,
                         isUser: false,
                         session: session,
-                        usedContext: response.context_used,
-                        serverId: response.memory_id,
-                        type: response.type
+                        usedContext: didUseMemory,
+                        serverId: serverResponse.memory_id,
+                        type: serverResponse.type,
+                        clientMessageId: effectiveClientMessageId
                     )
                     reply.status = .sent
-                    modelContext.insert(reply)
+                    self.modelContext.insert(reply)
 
-                    // Add to relationship
                     session.messages.append(reply)
                     session.lastMessageAt = Date()
 
-                    // 🆕 Sync outfit if changed via chat
-                    if response.outfit_changed == true, let outfitId = response.outfit_changed_to {
+                    if serverResponse.outfit_changed == true, let outfitId = serverResponse.outfit_changed_to {
                         if let newOutfit = WardrobeManager.shared.wardrobe.first(where: {
                             $0.id == outfitId
                         }) {
@@ -696,29 +804,92 @@ struct ContentView: View {
                         }
                     }
 
-                    print("✅ Message sent and reply received")
+                    print("✅ Message delivered with id \(effectiveClientMessageId)")
 
-                    // Speak if auto-speak is on AND (Voice Mode OR Video Call is active)
                     if self.autoSpeakReplies && (self.voiceMode || self.showingAvatar) {
-                        self.stt.stop()  // ensure mic is off while speaking
+                        self.stt.stop()
                         self.tts.speak(
-                            response.reply,
+                            serverResponse.reply,
                             voiceId: self.selectedVoiceId,
                             pitchMultiplier: Float(self.voicePitch),
-                            rate: Float(self.voiceRate))
-                    } else {
-                        // If not speaking, and we are in voice mode, maybe resume listening?
-                        // Depending on UX preference. For now, let's respect hands-free logic only if TTS was involved
-                        // OR if we want 'silent' hands-free, we'd trigger stt.start() here.
-                        // But usually voice mode implies hearing the response.
+                            rate: Float(self.voiceRate)
+                        )
                     }
-                } else {
-                    userMsg.status = .failed
-                    connectionStatus = .serverError
-                    print("❌ Failed to parse server response")
+                }
+
+                if serverResponse.ack_required == true || serverResponse.client_message_id != nil {
+                    self.sendChatAck(clientMessageId: effectiveClientMessageId)
                 }
             }
         }.resume()
+    }
+
+    private func scheduleChatRetryOrFail(
+        session: ChatSession,
+        userMsg: ChatMessage,
+        messageText: String,
+        historyItems: [HistoryItem],
+        clientMessageId: String,
+        attempt: Int,
+        reason: String,
+        fallbackConnection: ConnectionStatus,
+        retryDelay: Double?
+    ) {
+        if attempt < maxChatDeliveryAttempts {
+            let delay = retryDelay ?? (baseChatRetryDelay * pow(2.0, Double(attempt - 1)))
+            print("↻ Chat retry \(attempt + 1)/\(maxChatDeliveryAttempts) for \(clientMessageId): \(reason)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                self.sendChatRequest(
+                    session: session,
+                    userMsg: userMsg,
+                    messageText: messageText,
+                    historyItems: historyItems,
+                    clientMessageId: clientMessageId,
+                    attempt: attempt + 1
+                )
+            }
+            return
+        }
+
+        finalizeChatFailure(userMsg: userMsg, connection: fallbackConnection, reason: reason)
+        triggerChatFallbackNotification(clientMessageId: clientMessageId)
+    }
+
+    private func finalizeChatFailure(userMsg: ChatMessage, connection: ConnectionStatus, reason: String) {
+        userMsg.status = .failed
+        connectionStatus = connection
+        isTyping = false
+        print("❌ Chat delivery failed: \(reason)")
+    }
+
+    private func sendChatAck(clientMessageId: String) {
+        guard let url = URL(string: "\(serverURL)/chat/ack") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 8
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "client_message_id": clientMessageId
+        ])
+
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    private func triggerChatFallbackNotification(clientMessageId: String) {
+        guard let url = URL(string: "\(serverURL)/chat/fallback-notification") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 8
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "client_message_id": clientMessageId
+        ])
+
+        URLSession.shared.dataTask(with: request).resume()
     }
 
     // ✅ NEW: Dedicated connection check (cleaner than hijacking sendMessage)

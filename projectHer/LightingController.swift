@@ -8,6 +8,9 @@ final class LightingController {
     private let sun = SKShapeNode(circleOfRadius: 36)
     private let moon = SKShapeNode(circleOfRadius: 28)
     private let shadow = SKSpriteNode()
+    private var lastTimeOfDay: CGFloat = 12
+    private var cloudiness: CGFloat = 0
+    private var precipitation: CGFloat = 0
 
     init(scene: AvatarScene, puppet: SKSpriteNode) {
         self.scene = scene
@@ -18,13 +21,19 @@ final class LightingController {
     }
 
     func update(timeOfDay hours: CGFloat) {
+        lastTimeOfDay = hours
         let normalized = hours.truncatingRemainder(dividingBy: 24) / 24
         updateBackground(normalized)
         updateOverlay(normalized)
         updatePuppetTint(normalized)
         updateShadow(normalized)
         updateCelestials(normalized)
-        updateWeatherBridge(normalized)
+    }
+
+    func updateWeatherContext(cloudiness: CGFloat, precipitation: CGFloat) {
+        self.cloudiness = max(0, min(1, cloudiness))
+        self.precipitation = max(0, min(1, precipitation))
+        update(timeOfDay: lastTimeOfDay)
     }
 
     private func setupOverlay() {
@@ -80,15 +89,25 @@ final class LightingController {
         let dawnColor = SKColor(red: 0.96, green: 0.7, blue: 0.85, alpha: 1)
         let duskColor = SKColor(red: 0.4, green: 0.08, blue: 0.25, alpha: 1)
 
+        let baseColor: SKColor
+
         switch t {
         case 0..<0.2:
-            scene.backgroundColor = color.lerp(to: dawnColor, progress: t / 0.2)
+            baseColor = color.lerp(to: dawnColor, progress: t / 0.2)
         case 0.2..<0.6:
-            scene.backgroundColor = dawnColor.lerp(to: dayColor, progress: (t - 0.2) / 0.4)
+            baseColor = dawnColor.lerp(to: dayColor, progress: (t - 0.2) / 0.4)
         case 0.6..<0.85:
-            scene.backgroundColor = dayColor.lerp(to: duskColor, progress: (t - 0.6) / 0.25)
+            baseColor = dayColor.lerp(to: duskColor, progress: (t - 0.6) / 0.25)
         default:
-            scene.backgroundColor = duskColor.lerp(to: color, progress: (t - 0.85) / 0.15)
+            baseColor = duskColor.lerp(to: color, progress: (t - 0.85) / 0.15)
+        }
+
+        let overcast = SKColor(red: 0.46, green: 0.53, blue: 0.62, alpha: 1)
+        let weatherDim = min(0.6, cloudiness * 0.35 + precipitation * 0.35)
+        if weatherDim > 0 {
+            scene.backgroundColor = baseColor.lerp(to: overcast, progress: weatherDim)
+        } else {
+            scene.backgroundColor = baseColor
         }
     }
 
@@ -108,6 +127,23 @@ final class LightingController {
             overlay.color = SKColor(red: 0.04, green: 0.07, blue: 0.18, alpha: 1)
             overlay.blendMode = .multiply
             overlay.alpha = 0.75
+        }
+
+        if cloudiness > 0 {
+            overlay.color = overlay.color.lerp(
+                to: SKColor(red: 0.74, green: 0.78, blue: 0.84, alpha: 1),
+                progress: min(1, cloudiness * 0.55)
+            )
+            overlay.alpha = max(overlay.alpha, 0.18 + cloudiness * 0.25)
+        }
+
+        if precipitation > 0 {
+            overlay.blendMode = .multiply
+            overlay.color = overlay.color.lerp(
+                to: SKColor(red: 0.42, green: 0.5, blue: 0.6, alpha: 1),
+                progress: min(1, precipitation * 0.7)
+            )
+            overlay.alpha = max(overlay.alpha, 0.3 + precipitation * 0.35)
         }
     }
 
@@ -141,7 +177,8 @@ final class LightingController {
     private func updateShadow(_ t: CGFloat) {
         let skew = cos(t * .pi * 2) * 0.35
         let length = 0.4 + (0.35 - abs(skew)) * 0.6
-        shadow.alpha = t > 0.95 || t < 0.05 ? 0.05 : 0.35
+        let weatherShadowFactor = max(0.15, 1 - (cloudiness * 0.5 + precipitation * 0.4))
+        shadow.alpha = (t > 0.95 || t < 0.05 ? 0.05 : 0.35) * weatherShadowFactor
         shadow.setScale(1)
         shadow.xScale = 1.35
         shadow.yScale = length
@@ -166,23 +203,6 @@ final class LightingController {
         moon.position = pos
         sun.alpha = sun.isHidden ? 0 : 0.9
         moon.alpha = moon.isHidden ? 0 : 0.7
-    }
-
-    private func updateWeatherBridge(_ t: CGFloat) {
-        guard let scene = scene else { return }
-        let night = t >= 0.8 || t <= 0.2
-        // We let LightingController handle night mode trigger for weather
-        if t <= 0.12 {
-            scene.weather.enable(.fog)
-        } else {
-            scene.weather.disable(.fog)
-        }
-        if night {
-            scene.weather.enable([.starsDeep, .starsBright])
-        } else {
-            scene.weather.disable(.starsDeep)
-            scene.weather.disable(.starsBright)
-        }
     }
 
     private func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat {

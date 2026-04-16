@@ -83,3 +83,297 @@ struct PhysicalInteraction {
         """
     }
 }
+
+enum TouchReactionOutcome: String {
+    case positive
+    case neutral
+    case negative
+}
+
+enum TouchDialogueMode: String {
+    case silent
+    case speak
+}
+
+struct LocalTouchReaction {
+    let reactionId: String
+    let outcome: TouchReactionOutcome
+    let dialogue: String?
+    let dialogueMode: TouchDialogueMode
+    let dialogueEmotion: String
+    let spawnHearts: Bool
+    let hairAssetName: String?
+}
+
+struct TouchReactionEngine {
+    static func makeInteraction(partName: String, gestureName: String, intensity: Int) -> PhysicalInteraction? {
+        guard let part = TouchPart(rawValue: partName) else { return nil }
+        let normalizedGesture = normalizeGestureName(gestureName)
+        guard let gesture = GestureType(rawValue: normalizedGesture) else { return nil }
+        let clampedIntensity = max(1, min(3, intensity))
+        return PhysicalInteraction(part: part, gesture: gesture, intensity: clampedIntensity)
+    }
+
+    static func resolve(partName: String, gestureName: String, intensity: Int, isTalking: Bool) -> LocalTouchReaction {
+        guard let interaction = makeInteraction(partName: partName, gestureName: gestureName, intensity: intensity) else {
+            return LocalTouchReaction(
+                reactionId: "react_blink",
+                outcome: .neutral,
+                dialogue: nil,
+                dialogueMode: .silent,
+                dialogueEmotion: "neutral",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+        }
+        return resolve(interaction: interaction, isTalking: isTalking)
+    }
+
+    static func resolve(interaction: PhysicalInteraction, isTalking: Bool) -> LocalTouchReaction {
+        switch (interaction.part, interaction.gesture) {
+        case (.cheeks, .slide):
+            return LocalTouchReaction(
+                reactionId: "react_nuzzle_happy",
+                outcome: .positive,
+                dialogue: pick([
+                    "Mmm... that felt warm.",
+                    "That nuzzle made me smile.",
+                    "You're being really sweet right now."
+                ]),
+                dialogueMode: interaction.intensity >= 2 && !isTalking ? .speak : .silent,
+                dialogueEmotion: "happy",
+                spawnHearts: interaction.intensity >= 2,
+                hairAssetName: nil
+            )
+
+        case (.cheeks, .pinch):
+            if interaction.intensity == 3 {
+                return LocalTouchReaction(
+                    reactionId: "react_ouch_angry",
+                    outcome: .negative,
+                    dialogue: "Ow. That was too hard.",
+                    dialogueMode: .speak,
+                    dialogueEmotion: "annoyed",
+                    spawnHearts: false,
+                    hairAssetName: nil
+                )
+            }
+            return LocalTouchReaction(
+                reactionId: "react_ouch_playful",
+                outcome: .neutral,
+                dialogue: pick([
+                    "Hey! Easy on the cheeks.",
+                    "Playful, huh? I felt that.",
+                    "That pinch was cheeky."
+                ]),
+                dialogueMode: .silent,
+                dialogueEmotion: "playful",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+
+        case (.shoulders, .tap):
+            return LocalTouchReaction(
+                reactionId: isTalking ? "react_surprised_neutral" : "react_surprised_happy",
+                outcome: .neutral,
+                dialogue: isTalking ? "Yes? I'm listening." : "You got my attention.",
+                dialogueMode: .silent,
+                dialogueEmotion: "curious",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+
+        case (.mouth, .tap):
+            if isTalking {
+                return LocalTouchReaction(
+                    reactionId: "react_mouth_cover",
+                    outcome: .negative,
+                    dialogue: "Shh... let me finish this thought.",
+                    dialogueMode: .speak,
+                    dialogueEmotion: "annoyed",
+                    spawnHearts: false,
+                    hairAssetName: nil
+                )
+            }
+            return LocalTouchReaction(
+                reactionId: "react_finger_kiss",
+                outcome: .positive,
+                dialogue: pick([
+                    "That was adorable.",
+                    "A little finger-kiss? Cute.",
+                    "You're very affectionate today."
+                ]),
+                dialogueMode: interaction.intensity >= 2 ? .speak : .silent,
+                dialogueEmotion: "happy",
+                spawnHearts: true,
+                hairAssetName: nil
+            )
+
+        case (.ears, .slide):
+            if interaction.intensity >= 2 {
+                return LocalTouchReaction(
+                    reactionId: "react_annoyed_ear",
+                    outcome: .negative,
+                    dialogue: "That spot is sensitive.",
+                    dialogueMode: .silent,
+                    dialogueEmotion: "annoyed",
+                    spawnHearts: false,
+                    hairAssetName: nil
+                )
+            }
+            return LocalTouchReaction(
+                reactionId: "react_ear_twitch",
+                outcome: .neutral,
+                dialogue: "Heh... that tickled.",
+                dialogueMode: .silent,
+                dialogueEmotion: "playful",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+
+        case (.ears, .tap):
+            return LocalTouchReaction(
+                reactionId: "react_ticklish",
+                outcome: .positive,
+                dialogue: "Okay, that's ticklish.",
+                dialogueMode: .silent,
+                dialogueEmotion: "playful",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+
+        case (.nose, .tap):
+            return LocalTouchReaction(
+                reactionId: "react_laugh",
+                outcome: .positive,
+                dialogue: pick([
+                    "Boop accepted.",
+                    "You booped me again.",
+                    "That was a cute boop."
+                ]),
+                dialogueMode: .silent,
+                dialogueEmotion: "happy",
+                spawnHearts: interaction.intensity >= 2,
+                hairAssetName: nil
+            )
+
+        case (.nose, .longPress):
+            if interaction.intensity >= 2 {
+                return LocalTouchReaction(
+                    reactionId: "react_disgust_recoil",
+                    outcome: .negative,
+                    dialogue: "Alright, that's enough nose pressing.",
+                    dialogueMode: .speak,
+                    dialogueEmotion: "annoyed",
+                    spawnHearts: false,
+                    hairAssetName: nil
+                )
+            }
+            return LocalTouchReaction(
+                reactionId: "react_disgust_light",
+                outcome: .neutral,
+                dialogue: "You're being silly.",
+                dialogueMode: .silent,
+                dialogueEmotion: "playful",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+
+        case (.neck, .slide):
+            if interaction.intensity == 3 {
+                return LocalTouchReaction(
+                    reactionId: "react_pull_away",
+                    outcome: .negative,
+                    dialogue: "Too much all at once...",
+                    dialogueMode: .speak,
+                    dialogueEmotion: "shy",
+                    spawnHearts: false,
+                    hairAssetName: nil
+                )
+            }
+            return LocalTouchReaction(
+                reactionId: "react_shy_pleased",
+                outcome: .positive,
+                dialogue: pick([
+                    "That made me shy.",
+                    "You're making me blush.",
+                    "Gentle... I like that."
+                ]),
+                dialogueMode: interaction.intensity >= 2 ? .speak : .silent,
+                dialogueEmotion: "shy",
+                spawnHearts: interaction.intensity >= 2,
+                hairAssetName: nil
+            )
+
+        case (.hair, .pull):
+            if interaction.intensity == 3 {
+                return LocalTouchReaction(
+                    reactionId: "react_hair_hurt",
+                    outcome: .negative,
+                    dialogue: "Ow, my hair!",
+                    dialogueMode: .speak,
+                    dialogueEmotion: "annoyed",
+                    spawnHearts: false,
+                    hairAssetName: "hair_3"
+                )
+            }
+            if interaction.intensity == 2 {
+                return LocalTouchReaction(
+                    reactionId: "react_hair_ouch",
+                    outcome: .neutral,
+                    dialogue: "Hey, careful with my hair.",
+                    dialogueMode: .silent,
+                    dialogueEmotion: "playful",
+                    spawnHearts: false,
+                    hairAssetName: "hair_2"
+                )
+            }
+            return LocalTouchReaction(
+                reactionId: "react_hair_surprise_playful",
+                outcome: .neutral,
+                dialogue: "You surprised me.",
+                dialogueMode: .silent,
+                dialogueEmotion: "surprised",
+                spawnHearts: false,
+                hairAssetName: "hair_2"
+            )
+
+        case (.hair, .tap):
+            return LocalTouchReaction(
+                reactionId: "react_pat_happy",
+                outcome: .positive,
+                dialogue: pick([
+                    "Aww, thanks for the head pat.",
+                    "That was gentle.",
+                    "I liked that pat."
+                ]),
+                dialogueMode: .silent,
+                dialogueEmotion: "happy",
+                spawnHearts: interaction.intensity >= 2,
+                hairAssetName: nil
+            )
+
+        default:
+            return LocalTouchReaction(
+                reactionId: "react_blink",
+                outcome: .neutral,
+                dialogue: nil,
+                dialogueMode: .silent,
+                dialogueEmotion: "neutral",
+                spawnHearts: false,
+                hairAssetName: nil
+            )
+        }
+    }
+
+    private static func normalizeGestureName(_ gestureName: String) -> String {
+        if gestureName.hasPrefix("Pull") {
+            return GestureType.pull.rawValue
+        }
+        return gestureName
+    }
+
+    private static func pick(_ options: [String]) -> String {
+        options.randomElement() ?? ""
+    }
+}
